@@ -481,6 +481,20 @@ def spotify_chart(cc):
 
 
 # ---------- YouTube (official embedded player only: listening, no downloads) ----------
+# The API key is restricted to this server's IPv4 address, so Google APIs are always reached over IPv4.
+import socket as _socket
+_orig_getaddrinfo = _socket.getaddrinfo
+
+
+def _ipv4_for_google(host, *args, **kwargs):
+    res = _orig_getaddrinfo(host, *args, **kwargs)
+    if isinstance(host, str) and host.endswith("googleapis.com"):
+        v4 = [r for r in res if r[0] == _socket.AF_INET]
+        return v4 or res
+    return res
+
+
+_socket.getaddrinfo = _ipv4_for_google
 def yt_search(q):
     """Search music videos via YouTube Data API v3. Results are cached in SQLite for 14 days because the free
     quota is ~100 searches a day."""
