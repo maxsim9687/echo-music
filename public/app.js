@@ -1,7 +1,8 @@
-import * as A from "./api.js?v=7";
-import * as R from "./recs.js?v=7";
-import { createFx } from "./fx.js?v=7";
-import { downloadOptions, download } from "./download.js?v=7";
+import * as A from "./api.js?v=10";
+import * as R from "./recs.js?v=10";
+import { createFx } from "./fx.js?v=10";
+import { downloadOptions, download } from "./download.js?v=10";
+import * as E from "./engine.js?v=10";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -130,11 +131,17 @@ function ytLoad() {
           onReady: () => resolve(yt.player),
           onStateChange: (e) => {
             yt.playing = e.data === YT.PlayerState.PLAYING;
+            if (yt.playing) ytFails = 0;
             if (e.data === YT.PlayerState.PLAYING) errRun = 0;
             if (e.data === YT.PlayerState.ENDED) { const t = cur(); if (t) R.finished(t); next("end"); }
             sync();
           },
-          onError: () => { if (cur()?.src === "youtube") { toast("YouTube не даёт проиграть это видео, включаю следующее"); setTimeout(() => next("error"), 600); } },
+          onError: (e) => {
+            const t = cur();
+            if (t?.src !== "youtube") return;
+            if (e.data === 101 || e.data === 150 || e.data === 100) A.reportBadYouTube(t.rawId);
+            ytFail(true);
+          },
         },
       });
     };
@@ -150,6 +157,15 @@ setInterval(() => {
   audio.dispatchEvent(new Event("timeupdate"));
 }, 500);
 const isYT = () => cur()?.src === "youtube";
+let ytFails = 0;
+function ytFail(videoOnly = false) {
+  ytFails++;
+  if (!videoOnly || ytFails >= 3) {
+    if (!ytBroken) toast("YouTube сейчас не открывается (в России он часто замедлен). Волна продолжит без него, включить снова: «Настроить» → «Хиты с YouTube».");
+    ytBroken = true; resetPool();
+  } else toast("Это видео YouTube не даёт встроить, включаю следующее");
+  setTimeout(() => next("error"), 600);
+}
 const eng = {
   playing: () => (isYT() ? yt.playing : !!cur() && !audio.paused),
   time: () => (isYT() ? yt.time : audio.currentTime),
@@ -171,9 +187,9 @@ function load(autoplay) {
   R.started(t);
   if (t.src === "youtube") {
     audio.pause(); audio.removeAttribute("src");
-    $("ytbox").hidden = false; $("ytChannel").textContent = t.channel || t.artist; $("ytLink").href = t.link;
+    $("ytbox").hidden = false; $("ytChannel").textContent = t.channel || t.artist; $("ytLink").href = t.link; $("ytSpot").href = A.spotifySearchUrl(t);
     ytLoad().then((p) => { p.setVolume(Math.round(audio.volume * 100)); autoplay ? p.loadVideoById(t.rawId) : p.cueVideoById(t.rawId); })
-      .catch(() => { toast("YouTube не загрузился. В России он часто замедлен, попробуйте с VPN."); });
+      .catch(() => { ytFail(); });
   } else {
     if (yt.player?.stopVideo) yt.player.stopVideo();
     $("ytbox").hidden = true; yt.playing = false;
@@ -185,6 +201,7 @@ function load(autoplay) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.genre || "Эхо", artwork: t.cover ? [{ src: t.cover, sizes: "480x480" }] : [] });
   }
   if (pl.mode === "wave" && pl.queue.length - pl.i < 4) refillWave();
+  if (typeof fsTrack === "function") setTimeout(fsTrack, 0);
   // warm the next track on the server so skipping starts instantly
   const nx = pl.queue[pl.i + 1];
   if (nx?.src === "audius") setTimeout(() => fetch(A.refresh(nx).stream, { headers: { Range: "bytes=0-1" } }).catch(() => {}), 1500);
@@ -256,9 +273,9 @@ function sync() {
   const waveOn = pl.mode === "wave" && t;
   $("vibeIcon").setAttribute("href", playing && pl.mode === "wave" ? "#i-pause" : "#i-play");
   $("vibeSvg").setAttribute("class", playing && pl.mode === "wave" ? "" : "play");
-  $("vibeL").textContent = waveOn ? (playing ? "Сейчас играет" : "На паузе") : "Моя волна";
+  $("vibeL").textContent = waveOn ? (playing ? (t.reason ? `Сейчас играет · ${t.reason}` : "Сейчас играет") : "На паузе") : "Моя волна";
   $("vibeT").textContent = waveOn ? t.title : "Нажмите, чтобы начать";
-  $("vibeA").textContent = waveOn ? `${t.artist}${t.genre ? " · " + t.genre : ""}` : (pl.mood ? `Настроение: ${pl.mood}` : "Подстроится под ваш вкус");
+  $("vibeA").textContent = waveOn ? `${t.artist}${t.src === "youtube" ? " · источник: YouTube" : t.genre ? " · " + t.genre : ""}` : (pl.mood ? `Настроение: ${pl.mood}` : "Подстроится под ваш вкус");
   $("vibeActs").hidden = !waveOn;
   if (waveOn) $("wLike").setAttribute("aria-pressed", String(R.isLiked(t)));
   $("bigArt").innerHTML = waveOn ? cv(t.cover, 3) : `<span class="cv3" style="display:block;width:100%;height:100%"></span>`;
@@ -271,40 +288,12 @@ function sync() {
 // ---------------- wave ----------------
 let pool = [], poolKey = "", poolAt = 0, poolRun = null, refilling = null, waveGen = 0;
 let W = { ...R.WAVE_DEFAULTS, ...store.get("echo.wave", {}) };
-const waveCtx = (extra = {}) => ({ mood: pl.mood, cfg: W, ...extra });
+const waveCtx = (extra = {}) => ({ mood: pl.mood, cfg: waveCfg(), ...extra });
 
-function poolJobs(mood) {
-  const pre = mood && R.MOOD_PRESETS[mood];
-  const jobs = [];
-  if (pre?.tags) {
-    // genre waves (Phonk…) live in search results more than in the genre charts
-    pre.queries.forEach((q) => jobs.push(A.auSearch(q, { limit: 40 })));
-    pre.genres.slice(0, 2).forEach((g) => jobs.push(A.auTrending({ genre: g, limit: 30 })));
-  } else {
-    jobs.push(A.auTrending({ time: "week", limit: 60 }));
-    for (const g of R.topGenres(3)) jobs.push(A.auTrending({ genre: g, limit: 30 }));
-    jobs.push(A.auTrending({ time: "month", limit: 40 }), A.auUnderground(30));
-    for (const a of R.topArtists(3)) if (a.startsWith("au:")) jobs.push(A.auArtist(a));
-    for (const tag of R.topTags(2)) jobs.push(A.auSearch(tag, { limit: 20 }));
-    // similar to what you love: tags and genre of a few liked tracks
-    for (const seed of R.likeSeeds(3)) {
-      const tags = (seed.tags || []).slice(0, 2).join(" ");
-      if (tags) jobs.push(A.auSearch(tags, { limit: 20 }));
-      if (seed.genre) jobs.push(A.auTrending({ genre: seed.genre, limit: 30 }));
-    }
-    // exploration: one genre the listener has never played
-    const explore = R.unexploredGenre();
-    if (explore) jobs.push(A.auTrending({ genre: explore, limit: 15 }));
-    if (pre) { pre.genres.slice(0, 3).forEach((g) => jobs.push(A.auTrending({ genre: g, limit: 30 }))); pre.queries.forEach((q) => jobs.push(A.auSearch(q, { limit: 25 }))); }
-  }
-  jobs.push(A.localTracks());
-  if (W.novelty < 60) jobs.push(Promise.resolve(Object.values(R.P.likes).map(A.refresh)));
-  if (A.hasJamendo()) {
-    const tags = (pre?.tags || (pre ? pre.genres : R.topGenres(3)).map(A.jTag)).filter(Boolean).slice(0, 3).join("+");
-    jobs.push(A.jaPopular({ tags: tags || undefined, limit: 40, instrumental: W.vocals === "instrumental" }));
-  }
-  return jobs;
-}
+// candidate sources live in engine.js («Моя волна 3»): ~15 randomised sources incl. YouTube hits
+let ytBroken = false;
+const waveCfg = () => ({ ...W, yt: W.yt !== false && !ytBroken });
+function poolJobs(mood) { return E.sources(mood, waveCfg()); }
 // Resolves `first` as soon as there is enough to start playing; `all` when every source has answered.
 function ensurePool(mood, quick = false) {
   const key = (mood || "") + "|" + W.novelty;
@@ -313,7 +302,7 @@ function ensurePool(mood, quick = false) {
     pool = []; poolAt = 0; poolKey = key;
     let release; const first = new Promise((r) => (release = r));
     const run = { key };
-    const add = (list) => { if (poolRun !== run) return; pool = A.dedupe([...pool, ...list]); if (R.pick(pool, 6, waveCtx({ explore: 0 })).length >= 6) release(pool); };
+    const add = (list) => { if (poolRun !== run) return; pool = A.dedupe([...pool, ...list]); if (pool.length >= 60 || E.pick(pool, 6, waveCtx({ explore: 0, markServed: false })).length >= 6) release(pool); };
     run.all = Promise.allSettled(poolJobs(mood).map((j) => j.then(add))).then(() => { if (poolRun === run) poolAt = Date.now(); release(pool); return pool; });
     run.first = first;
     poolRun = run;
@@ -328,7 +317,7 @@ function refillWave() {
     const p = await ensurePool(pl.mood, true);
     if (gen !== waveGen) return;
     const inQ = new Set(pl.queue.map((t) => t.id));
-    const add = R.pick(p.filter((t) => !inQ.has(t.id)), 8, waveCtx({ prev: pl.queue.at(-1), recent: pl.queue.slice(-8) }));
+    const add = E.pick(p.filter((t) => !inQ.has(t.id)), 8, waveCtx({ prev: pl.queue.at(-1), recent: pl.queue.slice(-8) }));
     pl.queue.push(...add); sync();
   })().finally(() => { refilling = null; });
   return refilling;
@@ -340,7 +329,7 @@ async function startWave() {
   $("vibeT").textContent = "Подбираю треки…";
   try {
     const p = await ensurePool(pl.mood, true);
-    const q = R.pick(p, 6, waveCtx({ prev: cur(), recent: pl.queue.slice(Math.max(0, pl.i - 7), pl.i + 1) }));
+    const q = E.pick(p, 6, waveCtx({ prev: cur(), recent: pl.queue.slice(Math.max(0, pl.i - 7), pl.i + 1) }));
     if (!q.length) throw new Error("empty");
     playList(q, 0, "wave");
   } catch {
@@ -359,7 +348,7 @@ async function retuneWave() {
 
 // wave settings panel
 function renderWaveCfg() {
-  $("wcNovelty").value = W.novelty; $("wcPop").value = W.popularity; $("wcDl").checked = W.onlyDl;
+  $("wcNovelty").value = W.novelty; $("wcPop").value = W.popularity; $("wcDl").checked = W.onlyDl; $("wcYt").checked = W.yt !== false;
   document.querySelectorAll("#wcTempo button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.tempo)));
   document.querySelectorAll("#wcVocals button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.vocals)));
   $("wcNoveltyV").textContent = W.novelty < 35 ? "больше любимого" : W.novelty > 65 ? "больше нового" : "поровну";
@@ -374,6 +363,7 @@ $("wcToggle").onclick = () => { const p = $("waveCfg"); p.hidden = !p.hidden; $(
 $("wcNovelty").oninput = (e) => setWave({ novelty: +e.target.value });
 $("wcPop").oninput = (e) => setWave({ popularity: +e.target.value });
 $("wcDl").onchange = (e) => setWave({ onlyDl: e.target.checked });
+$("wcYt").onchange = (e) => { ytBroken = false; setWave({ yt: e.target.checked }); };
 $("wcTempo").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ tempo: b.dataset.v }); };
 $("wcVocals").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ vocals: b.dataset.v }); };
 $("wcReset").onclick = () => setWave({ ...R.WAVE_DEFAULTS });
@@ -401,7 +391,8 @@ function rows(el, tracks, empty = "Пока пусто") {
       <span class="al">${esc(t.genre || "")}<span class="q">${esc(t.quality)}</span></span>
       <span class="d">${fmt(t.duration)}</span>
       <button class="like" type="button" data-id="${esc(t.id)}" aria-label="Нравится" aria-pressed="${R.isLiked(t)}"><svg class="i"><use href="#i-heart"/></svg></button>
-      <button class="dl" type="button" aria-label="Скачать" ${t.downloadable ? 'title="Скачать"' : 'disabled title="Автор не разрешил скачивание"'}><svg class="i"><use href="#i-dl"/></svg></button>
+      <button class="addpl" type="button" aria-label="Добавить в плейлист" title="Добавить в плейлист">+</button>
+      <button class="dl" type="button" aria-label="Скачать" ${t.downloadable ? 'title="Скачать"' : 'disabled title="' + (t.src === "youtube" ? "Только прослушивание через YouTube" : "Автор не разрешил скачивание") + '"'}><svg class="i"><use href="#i-dl"/></svg></button>
     </div>`).join("");
   sync();
 }
@@ -410,6 +401,7 @@ document.addEventListener("click", (e) => {
   const row = e.target.closest(".tr[data-id]"); if (!row) return;
   const list = lists.get(row.parentElement.id) || [], t = list[+row.dataset.n]; if (!t) return;
   if (e.target.closest(".like")) return doLike(t);
+  if (e.target.closest(".addpl")) return openPlMenu(t, e.target.closest(".addpl"));
   if (e.target.closest(".dl")) return openDlMenu(t, e.target.closest(".dl"));
   if (e.target.closest(".del")) return delUpload(t);
   if (cur()?.id === t.id) return toggle();
@@ -713,8 +705,163 @@ $("chPlay").onclick = async () => {
   btn.disabled = false;
 };
 
+// ---------------- add to playlist menu ----------------
+function openPlMenu(t, anchor) {
+  closeMenu();
+  menu = document.createElement("div"); menu.className = "menu"; menu.setAttribute("role", "menu");
+  const pls = R.P.playlists.slice(0, 12);
+  menu.innerHTML = `<button type="button" role="menuitem" data-new="1"><b>Новый плейлист…</b><small>с этим треком</small></button>`
+    + pls.map((p, i) => `<button type="button" role="menuitem" data-i="${i}"><b>${esc(p.title)}</b><small>${p.tracks.length}</small></button>`).join("");
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect(), mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.max(8, Math.min(innerWidth - mw - 8, r.right - mw)) + "px";
+  menu.style.top = (r.top - mh - 8 > 8 ? r.top - mh - 8 : r.bottom + 8) + "px";
+  menu.onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    closeMenu();
+    if (b.dataset.new) {
+      const name = `Плейлист ${R.P.playlists.length + 1}`;
+      R.createPlaylist(name, [t]); toast(`Создан «${name}». Переименовать можно в Коллекции.`);
+    } else {
+      const p = pls[+b.dataset.i];
+      toast(R.addToPlaylist(p.id, t) ? `Добавлено в «${p.title}»` : `Уже есть в «${p.title}»`);
+    }
+    if (!$("v-library").hidden) renderLibrary();
+  };
+}
+
+// ---------------- import by link (Spotify, Apple Music, Deezer, YouTube) ----------------
+const imp = { run: 0 };
+const nkey = (s) => (s || "").toLowerCase().replace(/\(.*?\)|\[.*?\]/g, " ").replace(/feat\.?.*$|ft\..*$/i, " ").replace(/[^a-z0-9а-яё]+/gi, " ").trim();
+let ytIndex = null;
+async function buildYtIndex() {
+  if (ytIndex) return ytIndex;
+  ytIndex = new Map();
+  for (const name of ["daily", "trending", "top"]) {
+    try {
+      for (const t of await E.ytCatalog(name)) {
+        const k = nkey(t.artist.split(",")[0]) + "|" + nkey(t.title);
+        if (!ytIndex.has(k)) ytIndex.set(k, t);
+      }
+    } catch {}
+  }
+  return ytIndex;
+}
+// Finds a playable version of an imported song. Order: uploads → YouTube video id from the link → YouTube hits
+// catalog → Audius original → Audius version → YouTube search (only if a key is set). Returns {t, kind} or null.
+async function matchImported(it, uploads) {
+  const na = nkey((it.artist || "").split(",")[0]), nt = nkey(it.title);
+  const up = uploads.find((u) => nkey(u.title) === nt && (!na || nkey(u.artist).includes(na)));
+  if (up) return { t: up, kind: "orig" };
+  if (it.videoId) return { t: A.fromYouTubeCatalog({ videoId: it.videoId, artist: it.artist, title: it.title }, "import"), kind: "youtube" };
+  const idx = await buildYtIndex();
+  const hit = idx.get(na + "|" + nt);
+  if (hit) return { t: { ...hit }, kind: "youtube" };
+  try {
+    const list = await A.auSearch(`${it.artist} ${it.title}`.trim(), { limit: 12 });
+    let best = null, bestS = 0;
+    for (const t of list) {
+      const tt = nkey(t.title), ta = nkey(t.artist);
+      if (!nt || !tt.includes(nt)) continue;
+      const orig = na && ta === na;
+      const sc = (orig ? 10 : 0) + (na && (tt.includes(na) || ta.includes(na)) ? 3 : 0) + (it.duration && t.duration ? Math.max(0, 3 - Math.abs(it.duration - t.duration) / 10) : 0);
+      if (sc > bestS) { bestS = sc; best = { t, kind: orig ? "orig" : "version" }; }
+    }
+    if (best && bestS >= 3) return best;
+  } catch {}
+  if (A.hasYouTube()) {
+    try {
+      const vids = await A.ytSearch(`${it.artist} ${it.title}`);
+      if (vids[0]) return { t: A.fromYouTube(vids[0], { title: it.title, artist: it.artist }), kind: "youtube" };
+    } catch {}
+  }
+  return null;
+}
+function impRender(st) {
+  const total = st.total || 1;
+  $("impName").textContent = `${st.service}: ${st.name}`;
+  $("impCount").textContent = `${st.done} из ${st.total}`;
+  $("impOk").style.width = (st.ok / total) * 100 + "%";
+  $("impMiss").style.width = (st.miss.length / total) * 100 + "%";
+  $("impBar").setAttribute("aria-valuenow", Math.round((st.done / total) * 100));
+  $("impOkN").textContent = st.ok; $("impVerN").textContent = st.ver; $("impMissN").textContent = st.miss.length;
+  $("impLeft").textContent = st.done < st.total ? `осталось ${st.total - st.done}` : st.stopped ? "остановлено" : "готово";
+  $("impMissBox").hidden = !st.miss.length;
+  $("impMissList").innerHTML = st.miss.slice(0, 300).map((m) => `<li>${esc(m.artist)} — ${esc(m.title)}</li>`).join("");
+  $("impPlay").hidden = !st.found.length;
+}
+$("impForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("impUrl").value.trim();
+  if (!url) return $("impUrl").focus();
+  const run = ++imp.run;
+  $("impGo").disabled = true; $("impProg").hidden = false;
+  $("impName").textContent = "Читаю плейлист…"; $("impCount").textContent = ""; $("impOk").style.width = $("impMiss").style.width = "0";
+  let data;
+  try { data = await A.importLink(url); }
+  catch (err) { $("impName").textContent = err.message; $("impGo").disabled = false; return; }
+  const dest = $("impDest").value;
+  const plId = dest === "new" ? R.createPlaylist(data.name, [], `Перенесено из ${data.service}`) : null;
+  const uploads = await A.localTracks();
+  const st = { service: data.service, name: data.name, total: data.tracks.length, done: 0, ok: 0, ver: 0, miss: [], found: [], stopped: false };
+  imp.state = st;
+  impRender(st);
+  let i = 0;
+  const worker = async () => {
+    while (i < data.tracks.length && run === imp.run) {
+      const it = data.tracks[i++];
+      const m = await matchImported(it, uploads);
+      if (run !== imp.run) return;
+      st.done++;
+      if (m) {
+        st.ok++; if (m.kind === "version") st.ver++;
+        m.t.via = "import";
+        st.found.push(m.t);
+        if (plId) R.addToPlaylist(plId, m.t); else R.addLike(m.t);
+      } else st.miss.push(it);
+      impRender(st);
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  if (run === imp.run) {
+    R.save();
+    toast(`Перенесено ${st.ok} из ${st.total}${st.miss.length ? `, не найдено ${st.miss.length}` : ""}`);
+    renderLibrary();
+  }
+  $("impGo").disabled = false;
+});
+$("impStop").onclick = () => { imp.run++; if (imp.state) { imp.state.stopped = true; impRender(imp.state); } $("impGo").disabled = false; R.save(); renderLibrary(); };
+$("impPlay").onclick = () => imp.state && playList(imp.state.found.map(A.refresh), 0, "list");
+
+// ---------------- own playlists ----------------
+let openPl = null;
+function renderPlView() {
+  const p = openPl && R.playlistById(openPl);
+  $("plView").hidden = !p;
+  if (!p) return;
+  $("plv-h").textContent = p.title;
+  $("plvNote").textContent = `${p.tracks.length} треков${p.desc ? " · " + p.desc : ""}`;
+  rows($("plTracks"), p.tracks.map((t) => A.refresh({ ...t })), "Плейлист пуст. Добавляйте треки кнопкой «+» у любой песни.");
+}
+$("plNew").onclick = () => { openPl = R.createPlaylist(`Плейлист ${R.P.playlists.length + 1}`); renderLibrary(); $("plView").scrollIntoView({ behavior: "smooth" }); };
+$("plvPlay").onclick = () => { const p = R.playlistById(openPl); if (p) playList(p.tracks.map((t) => A.refresh({ ...t })), 0, "list"); };
+$("plvClose").onclick = () => { openPl = null; renderPlView(); };
+$("plvRename").onclick = () => {
+  const h = $("plv-h");
+  if (h.isContentEditable) { R.renamePlaylist(openPl, h.textContent); h.contentEditable = "false"; $("plvRename").textContent = "Переименовать"; renderLibrary(); return; }
+  h.contentEditable = "true"; h.focus(); document.getSelection().selectAllChildren(h); $("plvRename").textContent = "Сохранить";
+};
+$("plv-h").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("plvRename").click(); } });
+$("plvDel").onclick = (e) => {
+  const b = e.currentTarget;
+  if (b.dataset.arm !== "1") { b.dataset.arm = "1"; b.textContent = "Точно удалить?"; setTimeout(() => { b.dataset.arm = ""; b.textContent = "Удалить"; }, 4000); return; }
+  b.dataset.arm = ""; b.textContent = "Удалить";
+  R.deletePlaylist(openPl); openPl = null; renderLibrary(); toast("Плейлист удалён");
+};
+
 // ---------------- library ----------------
 function renderLibrary() {
+  setTimeout(renderPlView, 0);
   const liked = Object.values(R.P.likes).map(A.refresh).sort((a, b) => b.likedAt - a.likedAt);
   $("lkNote").textContent = liked.length ? `${liked.length} треков` : "";
   rows($("liked"), liked, "Нажмите на сердечко у трека, и он появится здесь");
@@ -723,7 +870,7 @@ function renderLibrary() {
     ? R.P.playlists.map((p, i) => `<button class="card" type="button" data-i="${i}"><div class="cover">${cv(p.tracks.find((t) => t.cover)?.cover, i)}</div><b>${esc(p.title)}</b><span>${p.tracks.length} треков</span></button>`).join("")
     : `<div class="status">Попросите ИИшку в поиске собрать плейлист и сохраните его</div>`;
 }
-$("playlists").onclick = (e) => { const c = e.target.closest(".card"); if (c) playList(R.P.playlists[+c.dataset.i].tracks, 0, "list"); };
+$("playlists").onclick = (e) => { const c = e.target.closest(".card"); if (!c) return; openPl = R.P.playlists[+c.dataset.i].id; renderPlView(); $("plView").scrollIntoView({ behavior: "smooth" }); };
 
 // ---------------- upload (admin) ----------------
 $("genreList").innerHTML = GENRE_LIST.map((g) => `<option value="${esc(g)}">`).join("");
@@ -840,7 +987,11 @@ function renderPrefs() {
     const label = (k) => (map === "a" ? R.P.an[k] || "артист" : k);
     return `<div><h3>${title}</h3><div class="bars">${b.length ? b.map(([k, v]) => `<div><span>${esc(label(k))}</span><i style="width:${Math.max(6, (v / max) * 100)}%"></i><em>${v.toFixed(1)}</em></div>`).join("") : '<span class="src">Пока пусто: послушайте и полайкайте пару треков</span>'}</div></div>`;
   };
-  $("taste").innerHTML = bars("Жанры", "g", 6) + bars("Настроения", "m", 6) + bars("Артисты", "a", 6);
+  const ex = E.explain();
+  const arms = (title, list, names = {}) => `<div><h3>${title}</h3><div class="bars">${list.length ? list.slice(0, 6).map((x) => `<div><span>${esc(names[x.k] || x.k)}</span><i style="width:${Math.max(6, x.rate * 100)}%"></i><em>${Math.round(x.rate * 100)}%</em></div>`).join("") : '<span class="src">Волна ещё учится</span>'}</div></div>`;
+  $("taste").innerHTML = bars("Жанры", "g", 6) + bars("Настроения", "m", 6) + bars("Артисты", "a", 6)
+    + arms("Что заходит (жанры)", ex.genres) + arms("Откуда брать (источники)", ex.sources, E.SOURCE_NAMES)
+    + `<div><h3>Память волны</h3><p class="src" style="margin:0">Волна помнит ${ex.served} предложенных треков и не повторяет их от 1 до 14 дней.</p></div>`;
   $("prefGenres").innerHTML = R.STARTER_GENRES.map((g) => `<button class="mood" type="button" data-g="${esc(g)}" aria-pressed="${(R.P.g[g] || 0) > 0}">${esc(g)}</button>`).join("");
   $("srcs").innerHTML = `
     <div><b>Audius</b><span>Подключён. Полные треки, MP3 320 kbps. Скачивание там, где автор разрешил.</span></div>
@@ -854,6 +1005,236 @@ $("resetTaste").onclick = (e) => {
   if (b.dataset.arm !== "1") { b.dataset.arm = "1"; b.textContent = "Точно сбросить?"; setTimeout(() => { b.dataset.arm = ""; b.textContent = "Сбросить вкус"; }, 4000); return; }
   R.resetProfile(); resetPool(); b.dataset.arm = ""; b.textContent = "Сбросить вкус"; $("resetNote").textContent = "Вкус сброшен. Любимое и плейлисты остались."; renderPrefs();
 };
+
+// ---------------- full-screen player: cover glow, synced lyrics with dust, audio effects ----------------
+const fs = { open: false, lines: [], idx: -1, key: "", rgb: "150,150,150" };
+function openFs() {
+  if (!cur()) return toast("Сначала включите трек");
+  fs.open = true; $("fs").hidden = false; document.body.style.overflow = "hidden";
+  fsTrack(); requestAnimationFrame(sizeDust);
+}
+function closeFs() { fs.open = false; $("fs").hidden = true; document.body.style.overflow = ""; }
+$("npFs").onclick = (e) => { e.stopPropagation(); openFs(); };
+document.querySelector(".np").addEventListener("click", openFs);
+$("vibeT").addEventListener("click", () => cur() && openFs());
+$("vibeT").style.cursor = "pointer";
+$("fsClose").onclick = closeFs;
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && fs.open) closeFs(); });
+$("fsPlay").onclick = toggle; $("fsNext").onclick = () => next(); $("fsPrev").onclick = prev;
+$("fsLike").onclick = () => doLike(cur());
+$("fsDl").onclick = (e) => openDlMenu(cur(), e.currentTarget);
+$("fsSeek").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (eng.dur()) eng.seek(((e.clientX - r.left) / r.width) * eng.dur()); };
+$("fsFxBtn").onclick = () => { const on = $("fx").hidden; $("fx").hidden = !on; $("fsFxBtn").setAttribute("aria-pressed", String(on)); fxRender(); };
+
+// dominant colour of the cover → glow around it
+function coverColor(url) {
+  return new Promise((resolve) => {
+    if (!url || !url.startsWith("/")) return resolve(null); // only same-origin covers can be read
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement("canvas"); c.width = c.height = 32;
+        const x = c.getContext("2d"); x.drawImage(img, 0, 0, 32, 32);
+        const d = x.getImageData(0, 0, 32, 32).data;
+        let r = 0, g = 0, b = 0, w = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          const R = d[i], G = d[i + 1], B = d[i + 2], mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+          const sat = mx ? (mx - mn) / mx : 0, wt = 0.15 + sat * sat * 4 * (mx > 40 ? 1 : 0.2);
+          r += R * wt; g += G * wt; b += B * wt; w += wt;
+        }
+        r /= w; g /= w; b /= w;
+        const mx = Math.max(r, g, b, 1), k = Math.min(2.2, 230 / mx); // brighten so the glow is visible
+        resolve([r * k, g * k, b * k].map((v) => Math.round(Math.min(255, v))).join(","));
+      } catch { resolve(null); }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+function fsTrack() {
+  const t = cur(); if (!t || !fs.open) return;
+  $("fsT").textContent = t.title; $("fsA").textContent = t.artist;
+  const src = t.src === "youtube" ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: YouTube</a> · <a href="${esc(A.spotifySearchUrl(t))}" target="_blank" rel="noopener">Найти в Spotify</a>`
+    : t.src === "audius" && t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: Audius</a>`
+    : t.src === "jamendo" && t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: Jamendo</a>` : t.src === "local" ? "Ваша музыка" : "";
+  $("fsSrc").innerHTML = src + (t.reason ? ` · ${esc(t.reason)}` : "");
+  $("fsFrom").textContent = pl.mode === "wave" ? (pl.mood ? `Моя волна · ${pl.mood}` : "Моя волна") : t.src === "youtube" ? "Источник: YouTube" : "Сейчас играет";
+  $("fsCover").innerHTML = cv(t.cover && t.src === "audius" ? t.cover.replace(/\/480$/, "/1000") : t.cover, 3);
+  $("fsLike").setAttribute("aria-pressed", String(R.isLiked(t)));
+  $("fsDl").disabled = !t.downloadable;
+  coverColor(t.cover).then((rgb) => { fs.rgb = rgb || "150,150,150"; $("fs").style.setProperty("--glow", fs.rgb); });
+  loadLyrics(t);
+  fxRender();
+}
+
+// ---- lyrics ----
+function parseLrc(text) {
+  const out = [];
+  for (const line of (text || "").split(/\r?\n/)) {
+    const stamps = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!stamps.length) continue;
+    const words = line.replace(/\[[^\]]*\]/g, "").trim();
+    for (const m of stamps) out.push({ t: +m[1] * 60 + +m[2], text: words });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+async function loadLyrics(t) {
+  const key = t.id;
+  if (fs.key === key) return;
+  fs.key = key; fs.lines = []; fs.idx = -1;
+  const box = $("lyr");
+  box.className = "lyr"; box.innerHTML = `<p class="none">Ищу текст…</p>`; $("lyrSrc").textContent = "";
+  try {
+    const q = new URLSearchParams({ artist: t.artist || "", title: t.title || "", duration: Math.round(t.duration || 0) });
+    const d = await A.api(`/api/lyrics?${q}`);
+    if (fs.key !== key) return;
+    if (d.synced) {
+      fs.lines = parseLrc(d.synced);
+      box.innerHTML = fs.lines.map((l, i) => `<p data-i="${i}" class="${l.text ? "" : "blank"}">${esc(l.text) || "♪"}</p>`).join("");
+    } else if (d.plain) {
+      box.classList.add("plain");
+      box.innerHTML = d.plain.split(/\n/).map((l) => `<p>${esc(l) || "&nbsp;"}</p>`).join("");
+      box.scrollTop = 0;
+    } else {
+      box.innerHTML = `<p class="none">${d.instrumental ? "Инструментальный трек, слов нет" : "Текст этой песни не найден"}</p>`;
+    }
+    $("lyrSrc").textContent = d.source ? `Текст: ${d.source}` : "";
+  } catch { if (fs.key === key) box.innerHTML = `<p class="none">Тексты сейчас недоступны</p>`; }
+}
+$("lyr").addEventListener("click", (e) => { const p = e.target.closest("p[data-i]"); if (p && fs.lines[+p.dataset.i]) eng.seek(fs.lines[+p.dataset.i].t + 0.05); });
+let userScrollAt = 0;
+$("lyr").addEventListener("wheel", () => { userScrollAt = Date.now(); }, { passive: true });
+$("lyr").addEventListener("touchmove", () => { userScrollAt = Date.now(); }, { passive: true });
+
+// ---- dust: the finished line breaks into particles that drift away ----
+const dustCv = $("dust"), dctx = dustCv.getContext("2d");
+let dust = [], dustRunning = false;
+function sizeDust() {
+  const r = dustCv.getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
+  dustCv.width = r.width * dpr; dustCv.height = r.height * dpr; dctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener("resize", () => fs.open && sizeDust());
+function shatter(el) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches || !el.textContent.trim()) return;
+  const host = dustCv.getBoundingClientRect(), r = el.getBoundingClientRect();
+  if (r.bottom < host.top || r.top > host.bottom) return;
+  const cs = getComputedStyle(el), off = document.createElement("canvas");
+  const w = Math.ceil(r.width), h = Math.ceil(r.height);
+  if (!w || !h) return;
+  off.width = w; off.height = h;
+  const o = off.getContext("2d");
+  o.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; o.textBaseline = "top"; o.fillStyle = "#fff";
+  // re-flow the text into the same lines the browser used
+  const words = el.textContent.split(/\s+/), lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+  let line = "", y = parseFloat(cs.paddingTop) || 0;
+  for (const wd of words) {
+    const test = line ? line + " " + wd : wd;
+    if (o.measureText(test).width > w && line) { o.fillText(line, 0, y); line = wd; y += lh; } else line = test;
+  }
+  o.fillText(line, 0, y);
+  const data = o.getImageData(0, 0, w, h).data, step = Math.max(2, Math.round(parseFloat(cs.fontSize) / 14));
+  const fg = getComputedStyle(root).getPropertyValue("--fg").trim() || "#fff";
+  for (let yy = 0; yy < h; yy += step) for (let xx = 0; xx < w; xx += step) {
+    if (data[(yy * w + xx) * 4 + 3] < 128) continue;
+    dust.push({ x: r.left - host.left + xx, y: r.top - host.top + yy, vx: 0.4 + Math.random() * 1.6, vy: -0.6 - Math.random() * 1.4, life: 1, d: 0.008 + Math.random() * 0.014 + (xx / w) * 0.004, s: step * (0.6 + Math.random() * 0.6), c: Math.random() < 0.35 ? `rgb(${fs.rgb})` : fg, delay: (xx / w) * 18 });
+  }
+  if (dust.length > 9000) dust = dust.slice(-9000);
+  if (!dustRunning) { dustRunning = true; requestAnimationFrame(dustLoop); }
+}
+function dustLoop() {
+  const r = dustCv.getBoundingClientRect();
+  dctx.clearRect(0, 0, r.width, r.height);
+  for (const p of dust) {
+    if (p.delay > 0) { p.delay--; dctx.globalAlpha = 1; dctx.fillStyle = p.c; dctx.fillRect(p.x, p.y, p.s, p.s); continue; }
+    p.x += p.vx; p.y += p.vy; p.vx *= 1.01; p.vy -= 0.01; p.life -= p.d;
+    dctx.globalAlpha = Math.max(0, p.life); dctx.fillStyle = p.c; dctx.fillRect(p.x, p.y, p.s * p.life, p.s * p.life);
+  }
+  dctx.globalAlpha = 1;
+  dust = dust.filter((p) => p.life > 0);
+  if (dust.length) requestAnimationFrame(dustLoop); else dustRunning = false;
+}
+function lyricsTick() {
+  if (!fs.open || !fs.lines.length) return;
+  const t = eng.time() + 0.15;
+  let i = fs.idx;
+  if (i < 0 || fs.lines[i]?.t > t || (fs.lines[i + 1] && fs.lines[i + 1].t <= t)) {
+    i = -1; for (let k = 0; k < fs.lines.length; k++) { if (fs.lines[k].t <= t) i = k; else break; }
+  }
+  if (i === fs.idx) return;
+  const box = $("lyr"), els = box.querySelectorAll("p[data-i]");
+  const prevIdx = fs.idx;
+  fs.idx = i;
+  els.forEach((el, k) => { el.classList.toggle("on", k === i); el.classList.toggle("gone", k < i); });
+  if (prevIdx >= 0 && i === prevIdx + 1 && els[prevIdx]) shatter(els[prevIdx]); // only on natural progress, not on seek
+  if (els[i] && Date.now() - userScrollAt > 2500) {
+    const target = els[i].offsetTop - box.clientHeight / 2 + els[i].offsetHeight / 2;
+    box.scrollTo({ top: target, behavior: "smooth" });
+  }
+}
+(function fsLoop() {
+  if (fs.open) {
+    lyricsTick();
+    const d = eng.dur() || cur()?.duration || 0, p = d ? (eng.time() / d) * 100 : 0;
+    $("fsFill").style.width = p + "%"; $("fsCur").textContent = fmt(eng.time()); $("fsDur").textContent = fmt(d);
+    const playing = eng.playing();
+    $("fs").classList.toggle("playing", playing);
+    $("fsPlayIcon").setAttribute("href", playing ? "#i-pause" : "#i-play");
+  }
+  requestAnimationFrame(fsLoop);
+})();
+
+// ---- audio effects: speed (slowed / sped up), bass, reverb ----
+const FX_DEFAULT = { rate: 1, bass: 0, rev: 0, pitch: true };
+const FX_PRESETS = { slowed: { rate: 0.85, bass: 4, rev: 45, pitch: true }, speed: { rate: 1.25, bass: 2, rev: 0, pitch: true }, bass: { rate: 1, bass: 12, rev: 0, pitch: true }, vibe: { rate: 0.92, bass: 6, rev: 30, pitch: true }, reset: FX_DEFAULT };
+let FX = { ...FX_DEFAULT, ...store.get("echo.fx", {}) };
+const graph = { ctx: null };
+function impulse(ctx, seconds = 3.2, decay = 2.6) {
+  const len = ctx.sampleRate * seconds, buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) { const ch = buf.getChannelData(c); for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+  return buf;
+}
+function ensureGraph() {
+  if (graph.ctx) { if (graph.ctx.state === "suspended") graph.ctx.resume(); return true; }
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaElementSource(audio);
+    const bass = ctx.createBiquadFilter(); bass.type = "lowshelf"; bass.frequency.value = 110;
+    const dry = ctx.createGain(), wet = ctx.createGain(), conv = ctx.createConvolver(), master = ctx.createGain();
+    conv.buffer = impulse(ctx);
+    src.connect(bass); bass.connect(dry); bass.connect(conv); conv.connect(wet); dry.connect(master); wet.connect(master); master.connect(ctx.destination);
+    Object.assign(graph, { ctx, bass, dry, wet });
+    return true;
+  } catch { return false; }
+}
+function applyFx() {
+  audio.playbackRate = FX.rate;
+  audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = !FX.pitch;
+  if (yt.player?.setPlaybackRate && isYT()) yt.player.setPlaybackRate([0.5, 0.75, 1, 1.25, 1.5].reduce((a, b) => (Math.abs(b - FX.rate) < Math.abs(a - FX.rate) ? b : a)));
+  const needGraph = FX.bass > 0 || FX.rev > 0 || graph.ctx;
+  if (needGraph && ensureGraph()) {
+    const now = graph.ctx.currentTime;
+    graph.bass.gain.setTargetAtTime(FX.bass, now, 0.05);
+    graph.wet.gain.setTargetAtTime(FX.rev / 100 * 0.9, now, 0.05);
+    graph.dry.gain.setTargetAtTime(1 - FX.rev / 100 * 0.35, now, 0.05);
+  }
+}
+function fxRender() {
+  $("fxRate").value = FX.rate; $("fxBass").value = FX.bass; $("fxRev").value = FX.rev; $("fxPitch").checked = FX.pitch;
+  $("fxRateV").textContent = `${Math.round(FX.rate * 100)}%`; $("fxBassV").textContent = `+${FX.bass} дБ`; $("fxRevV").textContent = `${FX.rev}%`;
+  const active = Object.entries(FX_PRESETS).find(([, v]) => v.rate === FX.rate && v.bass === FX.bass && v.rev === FX.rev)?.[0];
+  document.querySelectorAll(".fx-presets .mood").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === active)));
+  $("fxNote").textContent = isYT() ? "Для YouTube доступна только скорость: бас и реверб работают с треками Audius, Jamendo и вашими загрузками." : "";
+  $("fsFxBtn").classList.toggle("on", FX.rate !== 1 || FX.bass > 0 || FX.rev > 0);
+}
+function setFx(patch) { FX = { ...FX, ...patch }; store.set("echo.fx", FX); applyFx(); fxRender(); }
+$("fxRate").oninput = (e) => setFx({ rate: +e.target.value });
+$("fxBass").oninput = (e) => setFx({ bass: +e.target.value });
+$("fxRev").oninput = (e) => setFx({ rev: +e.target.value });
+$("fxPitch").onchange = (e) => setFx({ pitch: e.target.checked });
+document.querySelector(".fx-presets").onclick = (e) => { const b = e.target.closest("[data-p]"); if (b) setFx({ ...FX_PRESETS[b.dataset.p] }); };
+audio.addEventListener("play", () => { if (FX.bass > 0 || FX.rev > 0) applyFx(); else audio.playbackRate = FX.rate; });
+audio.addEventListener("loadedmetadata", () => { audio.playbackRate = FX.rate; audio.preservesPitch = !FX.pitch; });
 
 // ---------------- router ----------------
 const VIEWS = ["home", "search", "charts", "library", "login", "upload", "prefs", "welcome"];

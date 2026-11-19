@@ -17,6 +17,7 @@ public sealed class HomePage : PageBase
     TextBlock heroTitle = null!, eyebrowText = null!, vibeL = null!, vibeT = null!, vibeA = null!, nextT = null!, nextA = null!;
     Border eyebrowDot = null!, bigArt = null!, cfgPanel = null!;
     Button knob = null!, wLike = null!;
+    Btns.KnobView knobView = null!;
     StackPanel vibeActs = null!;
     readonly List<Button> moodChips = new();
     string? bigArtId;
@@ -112,18 +113,13 @@ public sealed class HomePage : PageBase
         var bottom = new Grid { ColumnSpacing = 24 };
         bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bottom.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        knob = new Button
-        {
-            Width = 88, Height = 88, CornerRadius = new CornerRadius(44), Padding = new Thickness(0), BorderThickness = new Thickness(Theme.T.Id == 3 ? 3 : 0),
-            Content = new FontIcon { Glyph = Glyph.Play, FontFamily = Theme.Icons, FontSize = 30 },
-        };
-        U.Style(knob, Theme.Fg, new SolidColorBrush(Theme.BgC), Theme.Fg, Theme.Alpha(Theme.FgC, 0.86), new SolidColorBrush(Theme.BgC), Theme.Fg);
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(knob, "Включить мою волну");
-        knob.Click += (s, e) =>
+        knobView = new Btns.KnobView(() =>
         {
             var p = Player.I;
             if (p.Mode == PlayMode.Wave && p.Current != null) p.Toggle(); else _ = Wave.Start(true);
-        };
+        });
+        knob = knobView.Button;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(knob, "Включить мою волну");
         vibeL = new TextBlock { FontSize = 10, FontWeight = FontWeights.SemiBold, CharacterSpacing = 140, Foreground = Theme.Muted, FontFamily = Theme.BodyFont };
         vibeT = U.Txt("Нажмите, чтобы начать", 26, FontWeights.SemiBold);
         vibeA = U.Muted("Подстроится под ваш вкус", 14);
@@ -134,7 +130,7 @@ public sealed class HomePage : PageBase
         var left = new Grid { ColumnSpacing = 18 };
         left.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         left.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        left.Children.Add(knob);
+        left.Children.Add(knobView.Root);
         Grid.SetColumn(nowTxt, 1); left.Children.Add(nowTxt);
         left.VerticalAlignment = VerticalAlignment.Bottom;
         bottom.Children.Add(left);
@@ -179,14 +175,14 @@ public sealed class HomePage : PageBase
         var tempo = U.Wrap(6);
         foreach (var (v, l) in new[] { ("any", "Любой"), ("slow", "Спокойный"), ("mid", "Средний"), ("fast", "Быстрый") })
         {
-            var b = U.Chip(l, Wave.W.Tempo == v, _ => Wave.SetSettings(w => w.Tempo = v));
+            var b = U.Seg(l, Wave.W.Tempo == v, _ => Wave.SetSettings(w => w.Tempo = v));
             tempoBtns.Add((b, v)); tempo.Children.Add(b);
         }
         Row(2, "Темп", tempo);
         var vocals = U.Wrap(6);
         foreach (var (v, l) in new[] { ("any", "Любой"), ("instrumental", "Без слов"), ("vocal", "С вокалом") })
         {
-            var b = U.Chip(l, Wave.W.Vocals == v, _ => Wave.SetSettings(w => w.Vocals = v));
+            var b = U.Seg(l, Wave.W.Vocals == v, _ => Wave.SetSettings(w => w.Vocals = v));
             vocalBtns.Add((b, v)); vocals.Children.Add(b);
         }
         Row(3, "Вокал", vocals);
@@ -226,6 +222,7 @@ public sealed class HomePage : PageBase
         }
         eyebrowText.Text = (Wave.Mood != null ? $"Моя волна · {Wave.Mood}" : Wave.Genre != null ? $"Моя волна · {Wave.Genre}" : "Подобрано под вас").ToUpperInvariant();
         eyebrowDot.Opacity = waveOn && playing ? 1 : 0.4;
+        knobView.SetPlaying(waveOn && playing);
         foreach (var b in moodChips) U.SetChip(b, (b.Content as TextBlock)?.Text == Wave.Mood);
         vibeL.Text = (waveOn ? (playing ? "Сейчас играет" : "На паузе") : "Моя волна").ToUpperInvariant();
         vibeT.Text = waveOn ? t!.Title : Wave.Status ?? "Нажмите, чтобы начать";

@@ -238,7 +238,7 @@ public sealed class TrackList : Grid
             eq.Visibility = now && playing ? Visibility.Visible : Visibility.Collapsed;
             var liked = Recs.IsLiked(t);
             U.SetGlyph(like, liked ? Glyph.HeartFill : Glyph.Heart);
-            like.Foreground = liked ? Theme.Fg : Theme.Muted;
+            Btns.SetOn(like, liked);
         }
     }
 }

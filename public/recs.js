@@ -11,7 +11,7 @@ export const MOOD_PRESETS = {
   "Phonk": { genres: ["Trap", "Hip-Hop/Rap", "Electronic"], moods: ["Aggressive", "Fiery", "Defiant", "Energizing", "Gritty"], bpm: [115, 175], queries: ["phonk", "memphis phonk", "phonk house", "dark phonk"], tags: ["phonk", "memphis", "cowbell"] },
   "Drift Phonk": { genres: ["Trap", "Electronic", "Hip-Hop/Rap"], moods: ["Aggressive", "Energizing", "Fiery"], bpm: [110, 170], queries: ["drift phonk", "phonk drift", "brazilian phonk", "funk phonk"], tags: ["driftphonk", "drift", "phonk", "brazilianphonk"] },
 };
-export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false };
+export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true };
 const TEMPO = { slow: [0, 95], mid: [95, 125], fast: [125, 999] };
 export const STARTER_GENRES = ["Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Rock", "Pop", "Ambient", "Alternative", "Drum & Bass", "Techno", "Jazz", "R&B/Soul", "Trap", "Classical"];
 export const ALL_GENRES = [...STARTER_GENRES, "Deep House", "Tech House", "Dubstep", "Trance", "Downtempo", "Experimental", "Soundtrack", "Acoustic", "Funk", "Disco", "Synthwave", "Future Bass", "Metal", "Folk", "Latin", "Reggae", "World", "Hyperpop"];
@@ -20,7 +20,7 @@ const DAY = 86400e3;
 const HALF_LIFE = 30 * DAY;
 
 function blank() {
-  return { g: {}, m: {}, a: {}, an: {}, t: {}, fav: {}, hist: [], skip: {}, ban: {}, banA: {}, banCount: {}, likes: {}, playlists: [], decayAt: Date.now(), updated: 0 };
+  return { g: {}, m: {}, a: {}, an: {}, t: {}, fav: {}, hist: [], skip: {}, ban: {}, banA: {}, banCount: {}, likes: {}, playlists: [], served: {}, servedA: {}, gb: {}, sb: {}, dp: {}, decayAt: Date.now(), updated: 0 };
 }
 function load() {
   try { return { ...blank(), ...(JSON.parse(localStorage.getItem(KEY)) || {}) }; } catch { return blank(); }
@@ -41,6 +41,49 @@ function decay() {
   P.decayAt = now;
 }
 decay();
+pruneServed();
+
+// ---- served memory: everything the wave queued, so it does not offer it again for days ----
+function pruneServed() {
+  const now = Date.now();
+  P.served = P.served || {}; P.servedA = P.servedA || {};
+  const ids = Object.entries(P.served);
+  for (const [id, at] of ids) if (now - at > 14 * DAY) delete P.served[id];
+  if (Object.keys(P.served).length > 4000) {
+    for (const [id] of Object.entries(P.served).sort((a, b) => a[1] - b[1]).slice(0, 1000)) delete P.served[id];
+  }
+  for (const [a, v] of Object.entries(P.servedA)) if (now - v.at > 3 * DAY) delete P.servedA[a];
+}
+export function markServed(tracks) {
+  const now = Date.now();
+  for (const t of tracks) {
+    P.served[t.id] = now;
+    if (t.artistId) {
+      const v = P.servedA[t.artistId] || { n: 0, at: now };
+      const decayN = v.n * Math.pow(0.5, (now - v.at) / (12 * 3600e3));
+      P.servedA[t.artistId] = { n: decayN + 1, at: now };
+    }
+  }
+  pruneServed(); save();
+}
+const daypartOf = (d = new Date()) => { const h = d.getHours(); return h < 6 ? "night" : h < 11 ? "morning" : h < 17 ? "day" : h < 22 ? "evening" : "night"; };
+const bucketOf = (t) => t.genre || (t.src === "youtube" ? "Мейнстрим" : "Другое");
+// bandit arms: genre bucket ("gb") and source ("sb"); reward = listened/finished/liked, penalty = skip/ban
+function reward(t, w) {
+  P.gb = P.gb || {}; P.sb = P.sb || {}; P.dp = P.dp || {};
+  const up = (table, key) => {
+    const s = table[key] || { a: 0, b: 0 };
+    if (w > 0) s.a += Math.min(1.5, w / 2); else s.b += Math.min(1.5, -w / 2);
+    // keep arms adaptive: old evidence fades so tastes can change
+    const n = s.a + s.b;
+    if (n > 60) { s.a *= 60 / n; s.b *= 60 / n; }
+    table[key] = s;
+  };
+  up(P.gb, bucketOf(t));
+  if (t.via) up(P.sb, t.via);
+  const dp = (P.dp[daypartOf()] = P.dp[daypartOf()] || {});
+  dp[bucketOf(t)] = clamp((dp[bucketOf(t)] || 0) + w * 0.5);
+}
 
 export function save() {
   P.updated = Date.now();
@@ -55,6 +98,7 @@ function bump(map, k, v) { if (k) P[map][k] = clamp((P[map][k] || 0) + v); }
 
 export function learn(t, w) {
   decay();
+  reward(t, w);
   bump("g", t.genre, w);
   bump("m", t.mood, w * 0.7);
   bump("a", t.artistId, w * 0.8);
@@ -62,7 +106,7 @@ export function learn(t, w) {
   (t.tags || []).slice(0, 4).forEach((tag) => bump("t", tag, w * 0.3));
   save();
 }
-const KEEP = ["id", "src", "rawId", "title", "artist", "artistId", "cover", "coverSm", "duration", "genre", "mood", "tags", "bpm", "key", "releaseDate", "quality", "downloadable", "ext", "stream", "dlOrig", "dlMp3", "instrumental"];
+const KEEP = ["via", "channel", "link", "views", "id", "src", "rawId", "title", "artist", "artistId", "cover", "coverSm", "duration", "genre", "mood", "tags", "bpm", "key", "releaseDate", "quality", "downloadable", "ext", "stream", "dlOrig", "dlMp3", "instrumental"];
 export const slim = (t) => Object.fromEntries(KEEP.filter((k) => t[k] !== undefined && t[k] !== null && t[k] !== "").map((k) => [k, k === "tags" ? t.tags.slice(0, 6) : t[k]]));
 
 // ---------- session: the instant reaction ----------
@@ -86,6 +130,8 @@ function sessionScore(t) {
   return s * 1.5;
 }
 const playedThisSession = new Set();
+export const playedInSession = (id) => playedThisSession.has(id);
+export const sessionScoreOf = (t) => sessionScore(t);
 export const sessionInfo = () => session.map((e) => ({ ...e }));
 
 // ---------- events ----------
@@ -97,6 +143,32 @@ export function like(t) {
   return true;
 }
 export const isLiked = (t) => !!(t && P.likes[t.id]);
+// add without toggling (imports): returns false when it was already liked
+export function addLike(t) {
+  if (P.likes[t.id]) return false;
+  P.likes[t.id] = { ...slim(t), likedAt: Date.now() };
+  bump("g", t.genre, 1.5); bump("a", t.artistId, 1.5); if (t.artistId) P.an[t.artistId] = t.artist;
+  return true;
+}
+// ---- own playlists ----
+export function createPlaylist(title, tracks = [], desc = "") {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  P.playlists = [{ id, title: (title || "Новый плейлист").slice(0, 80), desc, tracks: tracks.slice(0, 1000).map(slim), at: Date.now() }, ...P.playlists].slice(0, 60);
+  save();
+  return id;
+}
+export const playlistById = (id) => P.playlists.find((x) => x.id === id);
+export function addToPlaylist(id, t) {
+  const pl = playlistById(id); if (!pl) return false;
+  if (pl.tracks.some((x) => x.id === t.id)) return false;
+  pl.tracks.push(slim(t)); pl.at = Date.now(); save(); return true;
+}
+export function removeFromPlaylist(id, trackId) {
+  const pl = playlistById(id); if (!pl) return;
+  pl.tracks = pl.tracks.filter((x) => x.id !== trackId); save();
+}
+export function renamePlaylist(id, title) { const pl = playlistById(id); if (pl && title.trim()) { pl.title = title.trim().slice(0, 80); save(); } }
+export function deletePlaylist(id) { P.playlists = P.playlists.filter((x) => x.id !== id); save(); }
 export function ban(t) {
   P.ban[t.id] = 1;
   if (t.artistId) {
@@ -137,6 +209,8 @@ export function mergeProfile(server) {
   base.an = { ...(other.an || {}), ...(base.an || {}) };
   base.ban = { ...(other.ban || {}), ...(base.ban || {}) };
   base.banA = { ...(other.banA || {}), ...(base.banA || {}) };
+  base.served = { ...(other.served || {}), ...(base.served || {}) };
+  for (const tb of ["gb", "sb"]) { base[tb] = base[tb] || {}; for (const [k, v] of Object.entries(other[tb] || {})) if (!(k in base[tb])) base[tb][k] = v; }
   const ids = new Set(base.playlists.map((x) => x.id));
   base.playlists = [...base.playlists, ...(other.playlists || []).filter((x) => !ids.has(x.id))].slice(0, 40);
   const seen = new Set();

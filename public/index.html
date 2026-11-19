@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=10">
 <script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
 </head>
 <body>
@@ -27,6 +27,9 @@
   <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 6h4l10 12h4M3 18h4l3-3.6M14 9.6 17 6h4M18 3l3 3-3 3M18 15l3 3-3 3"/></symbol>
   <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
   <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
   <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
   <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></symbol>
@@ -67,6 +70,7 @@
           <div class="wc-row"><label for="wcPop">Андеграунд или хиты</label><input id="wcPop" type="range" min="0" max="100" step="5"><small id="wcPopV"></small></div>
           <div class="wc-row"><span>Темп</span><div class="seg" id="wcTempo" role="group" aria-label="Темп"><button type="button" data-v="any">Любой</button><button type="button" data-v="slow">Спокойный</button><button type="button" data-v="mid">Средний</button><button type="button" data-v="fast">Быстрый</button></div></div>
           <div class="wc-row"><span>Вокал</span><div class="seg" id="wcVocals" role="group" aria-label="Вокал"><button type="button" data-v="any">Любой</button><button type="button" data-v="instrumental">Без слов</button><button type="button" data-v="vocal">С вокалом</button></div></div>
+          <div class="wc-row"><label class="tgl" for="wcYt"><input id="wcYt" type="checkbox"><span>Хиты с YouTube: полные песни через официальный плеер, только слушать</span></label></div>
           <div class="wc-row"><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox"><span>Только треки, которые можно скачать</span></label><button class="linkbtn" id="wcReset" type="button">Сбросить</button></div>
         </div>
         <h1 id="wave-h">Моя волна</h1>
@@ -187,13 +191,33 @@
 
     <!-- LIBRARY -->
     <div class="view" id="v-library" hidden>
+      <section class="imp" aria-labelledby="imp-h">
+        <div class="sec-h"><h2 id="imp-h">Перенести музыку</h2><small>Spotify · Apple Music · Deezer · YouTube · YouTube Music</small></div>
+        <form class="ai-form" id="impForm">
+          <input id="impUrl" type="url" autocomplete="off" placeholder="Вставьте ссылку на плейлист, альбом или трек" aria-label="Ссылка на плейлист">
+          <select id="impDest" aria-label="Куда перенести"><option value="new">В новый плейлист</option><option value="likes">В Любимое</option></select>
+          <button class="btn solid" type="submit" id="impGo">Перенести</button>
+        </form>
+        <div class="imp-prog" id="impProg" hidden>
+          <div class="imp-head"><b id="impName"></b><span id="impCount"></span></div>
+          <div class="imp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="impBar"><i class="ok" id="impOk"></i><i class="miss" id="impMiss"></i></div>
+          <div class="imp-stats"><span><b id="impOkN">0</b> перенесено</span><span><b id="impVerN">0</b> из них версии</span><span><b id="impMissN">0</b> не найдено</span><span id="impLeft"></span></div>
+          <div class="row"><button class="btn" type="button" id="impPlay" hidden>Слушать</button><button class="linkbtn" type="button" id="impStop">Остановить</button></div>
+          <details id="impMissBox" hidden><summary>Что не нашлось</summary><ol id="impMissList"></ol></details>
+        </div>
+        <p class="src" style="margin:0;font-size:12px">Со стороннего сервиса берутся только названия и артисты. Сами песни ищутся в источниках сайта: ваша музыка, Audius, Jamendo и официальный плеер YouTube. Треки с YouTube можно только слушать.</p>
+      </section>
       <section class="sec" aria-labelledby="lk-h">
         <div class="sec-h"><h2 id="lk-h">Любимое</h2><small id="lkNote"></small></div>
         <div class="tracks" id="liked" role="list"></div>
       </section>
       <section class="sec" aria-labelledby="pl-h">
-        <div class="sec-h"><h2 id="pl-h">Мои плейлисты</h2></div>
+        <div class="sec-h"><h2 id="pl-h">Мои плейлисты</h2><button class="btn" type="button" id="plNew">Новый плейлист</button></div>
         <div class="cards" id="playlists"></div>
+      </section>
+      <section class="sec" id="plView" hidden aria-labelledby="plv-h">
+        <div class="sec-h"><h2 id="plv-h"></h2><div class="row"><small id="plvNote"></small><button class="btn solid" type="button" id="plvPlay">Слушать</button><button class="btn" type="button" id="plvRename">Переименовать</button><button class="linkbtn" type="button" id="plvDel">Удалить</button><button class="linkbtn" type="button" id="plvClose">Закрыть</button></div></div>
+        <div class="tracks" id="plTracks" role="list"></div>
       </section>
       <section class="sec" aria-labelledby="hs-h">
         <div class="sec-h"><h2 id="hs-h">Недавно слушали</h2></div>
@@ -310,19 +334,61 @@
       <div class="bar"><span id="cur">0:00</span><div class="track" id="seek" role="slider" aria-label="Позиция в треке" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" id="fill"></div></div><span id="dur">0:00</span></div>
     </div>
     <div class="right">
+      <button class="ib" id="npFs" type="button" aria-label="Открыть на весь экран"><svg class="i"><use href="#i-expand"/></svg></button>
       <button class="ib" id="npDl" type="button" aria-label="Скачать трек"><svg class="i"><use href="#i-dl"/></svg></button>
       <svg class="i" aria-hidden="true"><use href="#i-vol"/></svg><input class="vol" id="vol" type="range" min="0" max="100" value="80" aria-label="Громкость">
     </div>
   </div>
 </div>
 
+<div class="fs" id="fs" hidden role="dialog" aria-modal="true" aria-label="Сейчас играет">
+  <div class="fs-glow" id="fsGlow"></div>
+  <div class="fs-top">
+    <button class="ib" id="fsClose" type="button" aria-label="Свернуть"><svg class="i"><use href="#i-down"/></svg></button>
+    <span class="eyebrow" id="fsFrom">Сейчас играет</span>
+    <button class="ib" id="fsFxBtn" type="button" aria-label="Эффекты" aria-pressed="false"><svg class="i"><use href="#i-sliders"/></svg></button>
+  </div>
+  <div class="fs-main">
+    <div class="fs-left">
+      <div class="fs-cover" id="fsCover"></div>
+      <div class="fs-meta"><b id="fsT"></b><span id="fsA"></span><small class="fs-src" id="fsSrc"></small></div>
+      <div class="fs-bar"><span id="fsCur">0:00</span><div class="track" id="fsSeek" role="slider" aria-label="Позиция в треке" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" id="fsFill"></div></div><span id="fsDur">0:00</span></div>
+      <div class="fs-ctl">
+        <button class="ib" id="fsLike" type="button" aria-label="Нравится" aria-pressed="false"><svg class="i"><use href="#i-heart"/></svg></button>
+        <button class="ib" id="fsPrev" type="button" aria-label="Предыдущий"><svg class="i"><use href="#i-prev"/></svg></button>
+        <button class="ib main fs-play" id="fsPlay" type="button" aria-label="Воспроизвести"><svg class="i"><use href="#i-play" id="fsPlayIcon"/></svg></button>
+        <button class="ib" id="fsNext" type="button" aria-label="Следующий"><svg class="i"><use href="#i-next"/></svg></button>
+        <button class="ib" id="fsDl" type="button" aria-label="Скачать"><svg class="i"><use href="#i-dl"/></svg></button>
+      </div>
+      <div class="fx" id="fx" hidden>
+        <div class="fx-presets">
+          <button class="mood" type="button" data-p="slowed">Slowed + reverb</button>
+          <button class="mood" type="button" data-p="speed">Speed up</button>
+          <button class="mood" type="button" data-p="bass">Bass boost</button>
+          <button class="mood" type="button" data-p="vibe">Вайб</button>
+          <button class="mood" type="button" data-p="reset">Обычно</button>
+        </div>
+        <label class="fx-row" for="fxRate"><span>Скорость</span><input id="fxRate" type="range" min="0.5" max="1.5" step="0.01"><em id="fxRateV"></em></label>
+        <label class="fx-row" for="fxBass"><span>Бас</span><input id="fxBass" type="range" min="0" max="18" step="0.5"><em id="fxBassV"></em></label>
+        <label class="fx-row" for="fxRev"><span>Реверб</span><input id="fxRev" type="range" min="0" max="100" step="1"><em id="fxRevV"></em></label>
+        <label class="tgl" for="fxPitch"><input id="fxPitch" type="checkbox"><span>Менять тон вместе со скоростью, как в slowed</span></label>
+        <small class="src" id="fxNote"></small>
+      </div>
+    </div>
+    <div class="fs-right">
+      <div class="lyr" id="lyr" aria-live="off"></div>
+      <canvas class="dust" id="dust" aria-hidden="true"></canvas>
+      <small class="lyr-src" id="lyrSrc"></small>
+    </div>
+  </div>
+</div>
 <div class="ytbox" id="ytbox" hidden>
   <div class="yt-frame"><div id="ytplayer"></div></div>
-  <div class="yt-src"><span>Источник: <b>YouTube</b> · <span id="ytChannel"></span></span><a id="ytLink" href="https://www.youtube.com" target="_blank" rel="noopener">Открыть на YouTube</a></div>
+  <div class="yt-src"><span>Источник: <b>YouTube</b> · только прослушивание</span><span><a id="ytLink" href="https://www.youtube.com" target="_blank" rel="noopener">YouTube</a> · <a id="ytSpot" href="https://open.spotify.com" target="_blank" rel="noopener">Spotify</a></span></div><span id="ytChannel" hidden></span>
 </div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
-<script type="module" src="app.js?v=7"></script>
+<script type="module" src="app.js?v=10"></script>
 </body>
 </html>

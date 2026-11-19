@@ -64,79 +64,70 @@ public static class U
     public static FontIcon Icon(string glyph, double size = 16, Brush? fg = null) =>
         new() { Glyph = glyph, FontSize = size, FontFamily = Theme.Icons, Foreground = fg ?? Theme.Fg };
 
-    // ---------------- buttons ----------------
+    // ---------------- buttons (all go through Btns: web .btn / .mood / .seg / .chip-btn / .ib / .like) ----------------
     public static void Style(Control b, Brush bg, Brush fg, Brush border, Brush hoverBg, Brush hoverFg, Brush hoverBorder, string kind = "Button")
     {
-        var r = b.Resources;
-        r[kind + "Background"] = bg; r[kind + "BackgroundPointerOver"] = hoverBg; r[kind + "BackgroundPressed"] = hoverBg;
-        r[kind + "Foreground"] = fg; r[kind + "ForegroundPointerOver"] = hoverFg; r[kind + "ForegroundPressed"] = hoverFg;
-        r[kind + "BorderBrush"] = border; r[kind + "BorderBrushPointerOver"] = hoverBorder; r[kind + "BorderBrushPressed"] = hoverBorder;
-        r[kind + "BackgroundDisabled"] = bg; r[kind + "ForegroundDisabled"] = Theme.Alpha(Theme.MutedC, 0.5); r[kind + "BorderBrushDisabled"] = border;
-        b.Background = bg; b.Foreground = fg; b.BorderBrush = border;
+        if (b is Button btn) Btns.Custom(btn, bg, fg, border, hoverBg, hoverFg, hoverBorder);
+        else { b.Background = bg; b.Foreground = fg; b.BorderBrush = border; }
     }
 
-    static object Content(string? text, string? glyph, double size = 14)
+    static object Content(string? text, string? glyph, double size = 14, bool semibold = false)
     {
-        if (glyph == null) return new TextBlock { Text = text ?? "", FontFamily = Theme.BodyFont, FontSize = size };
-        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        sp.Children.Add(new FontIcon { Glyph = glyph, FontFamily = Theme.Icons, FontSize = size + 1 });
-        if (!string.IsNullOrEmpty(text)) sp.Children.Add(new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = size, VerticalAlignment = VerticalAlignment.Center });
+        var w = semibold ? FontWeights.SemiBold : FontWeights.Normal;
+        if (glyph == null) return new TextBlock { Text = text ?? "", FontFamily = Theme.BodyFont, FontSize = size, FontWeight = w };
+        var sp = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        sp.Children.Add(new FontIcon { Glyph = glyph, FontFamily = Theme.Icons, FontSize = size + 2, VerticalAlignment = VerticalAlignment.Center });
+        if (!string.IsNullOrEmpty(text)) sp.Children.Add(new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = size, FontWeight = w, VerticalAlignment = VerticalAlignment.Center });
         return sp;
     }
 
-    // Pill button: `.btn` / `.btn.solid` from the web.
+    // `.btn` / `.btn.solid`
     public static Button Pill(string text, Action? click = null, bool solid = false, string? glyph = null)
     {
-        var b = new Button { Content = Content(text, glyph), Padding = new Thickness(18, 9, 18, 9), BorderThickness = Theme.Bw, CornerRadius = Theme.Btn(40), MinHeight = 38 };
-        if (solid) Style(b, Theme.Fg, new SolidColorBrush(Theme.BgC), Theme.Fg, Theme.Alpha(Theme.FgC, 0.85), new SolidColorBrush(Theme.BgC), Theme.Fg);
-        else Style(b, Theme.Transparent, Theme.Fg, Theme.Line, Theme.Card2, Theme.Fg, Theme.Fg);
+        var b = new Button { Content = Content(text, glyph, 14, true) };
+        Btns.Make(b, solid ? BtnKind.Solid : BtnKind.Btn);
         if (click != null) b.Click += (s, e) => click();
         return b;
     }
 
-    // Small outline button with icon: `.chip-btn`.
+    // `.chip-btn` («Нравится», «Не то», «Настроить»)
     public static Button ChipBtn(string text, string? glyph, Action click)
     {
-        var b = new Button { Content = Content(text, glyph, 13), Padding = new Thickness(10, 5, 10, 5), BorderThickness = new Thickness(1), CornerRadius = Theme.Btn(30) };
-        Style(b, Theme.Transparent, Theme.Muted, Theme.Line, Theme.Transparent, Theme.Fg, Theme.Fg);
+        var b = new Button { Content = Content(text, glyph, 13) };
+        Btns.Make(b, BtnKind.Chip);
         b.Click += (s, e) => click();
         return b;
     }
+    public static void SetChipBtnOn(Button b, bool on) => Btns.SetOn(b, on);
 
-    public static void SetChipBtnOn(Button b, bool on)
-    {
-        b.Foreground = on ? Theme.Fg : Theme.Muted;
-        b.BorderBrush = on ? Theme.Fg : Theme.Line;
-    }
-
-    // Toggle chip: `.mood`.
+    // `.mood` toggle chip
     public static Button Chip(string text, bool on, Action<Button> click)
     {
-        var b = new Button { Content = new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = 14 }, Padding = new Thickness(14, 8, 14, 8), BorderThickness = Theme.Bw, CornerRadius = Theme.Btn(38) };
-        Style(b, Theme.T.Glass ? Theme.Transparent : new SolidColorBrush(Theme.BgC), Theme.Muted, Theme.Line, Theme.Card2, Theme.Fg, Theme.Fg);
-        SetChip(b, on);
+        var b = new Button { Content = new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = 14 } };
+        Btns.Make(b, BtnKind.Mood);
+        Btns.SetOn(b, on);
         b.Click += (s, e) => click(b);
         return b;
     }
 
-    public static void SetChip(Button b, bool on)
+    // `.seg button`: segmented choice, pressed = fg background
+    public static Button Seg(string text, bool on, Action<Button> click)
     {
-        b.Tag = on;
-        if (on) { b.Background = Theme.T.Id == 3 ? Theme.Fg : Theme.Card2; b.Foreground = Theme.T.Id == 3 ? new SolidColorBrush(Theme.BgC) : Theme.Fg; b.BorderBrush = Theme.Fg; }
-        else { b.Background = Theme.T.Glass ? Theme.Transparent : new SolidColorBrush(Theme.BgC); b.Foreground = Theme.Muted; b.BorderBrush = Theme.Line; }
+        var b = new Button { Content = new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = 13 } };
+        Btns.Make(b, BtnKind.Seg);
+        Btns.SetOn(b, on);
+        b.Click += (s, e) => click(b);
+        return b;
     }
-    public static bool IsOn(Button b) => b.Tag is true;
 
+    public static void SetChip(Button b, bool on) => Btns.SetOn(b, on);
+    public static bool IsOn(Button b) => Btns.IsOn(b);
+
+    // `.ib` (44 px, player bar), `.ib.main` (filled), `.like` / `.dl` (36 px, rows)
     public static Button IconBtn(string glyph, string tip, Action click, double size = 40, double iconSize = 16, bool main = false)
     {
-        var b = new Button
-        {
-            Content = new FontIcon { Glyph = glyph, FontFamily = Theme.Icons, FontSize = iconSize },
-            Width = size, Height = size, Padding = new Thickness(0), BorderThickness = new Thickness(main && Theme.T.Id == 3 ? 3 : 0),
-            CornerRadius = main ? Theme.Btn(size) : new CornerRadius(size / 2),
-        };
-        if (main) Style(b, Theme.Fg, new SolidColorBrush(Theme.BgC), Theme.Fg, Theme.Alpha(Theme.FgC, 0.85), new SolidColorBrush(Theme.BgC), Theme.Fg);
-        else Style(b, Theme.Transparent, Theme.Muted, Theme.Transparent, Theme.Transparent, Theme.Fg, Theme.Transparent);
+        var b = new Button { Content = new FontIcon { Glyph = glyph, FontFamily = Theme.Icons, FontSize = iconSize }, Width = size, Height = size };
+        Btns.Make(b, main ? BtnKind.IbMain : size <= 36 ? BtnKind.Icon : BtnKind.Ib);
         ToolTipService.SetToolTip(b, tip);
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, tip);
         b.Click += (s, e) => click();
@@ -145,9 +136,11 @@ public static class U
 
     public static void SetGlyph(Button b, string glyph) { if (b.Content is FontIcon f) f.Glyph = glyph; }
 
-    public static HyperlinkButton Link(string text, Action click)
+    // `.linkbtn`
+    public static Button Link(string text, Action click)
     {
-        var b = new HyperlinkButton { Content = new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = 14, TextDecorations = Windows.UI.Text.TextDecorations.Underline }, Padding = new Thickness(4, 2, 4, 2), Foreground = Theme.Fg };
+        var b = new Button { Content = new TextBlock { Text = text, FontFamily = Theme.BodyFont, FontSize = 14, TextDecorations = Windows.UI.Text.TextDecorations.Underline } };
+        Btns.Make(b, BtnKind.Link);
         b.Click += (s, e) => click();
         return b;
     }

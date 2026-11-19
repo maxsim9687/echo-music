@@ -14,7 +14,7 @@ public sealed class LoginPage : PageBase
     readonly StackPanel codeWrap;
     readonly TextBlock note;
     readonly Button go;
-    readonly HyperlinkButton back;
+    readonly Button back;
     string step = "email";
 
     public LoginPage() : base(560)

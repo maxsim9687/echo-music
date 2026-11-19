@@ -125,7 +125,7 @@ public sealed class PlayerBar : Grid
         var p = Player.I; var t = p.Current;
         U.SetGlyph(play, p.IsPlaying ? Glyph.Pause : Glyph.Play);
         ToolTipService.SetToolTip(play, p.IsPlaying ? "Пауза" : "Воспроизвести");
-        shuf.Foreground = p.Shuffle ? Theme.Fg : Theme.Muted;
+        Btns.SetOn(shuf, p.Shuffle);
         if (t == null)
         {
             title.Text = "Ничего не играет"; artist.Text = "Включите волну или найдите трек"; qBox.Visibility = Visibility.Collapsed;
@@ -135,7 +135,7 @@ public sealed class PlayerBar : Grid
         if ((cover.Tag as string) != t.Id) { cover.Tag = t.Id; U.SetCover(cover, t.CoverSm ?? t.Cover, 48, 1); }
         var liked = Recs.IsLiked(t);
         U.SetGlyph(like, liked ? Glyph.HeartFill : Glyph.Heart);
-        like.Foreground = liked ? Theme.Fg : Theme.Muted;
+        Btns.SetOn(like, liked);
         dl.IsEnabled = t.Downloadable;
         ToolTipService.SetToolTip(dl, t.Downloadable ? "Скачать" : "Автор не разрешил скачивание");
     }

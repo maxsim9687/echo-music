@@ -100,6 +100,8 @@ def init_db():
             tries INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS profiles(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS yt_bad(id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS lyrics_cache(k TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS yt_cache(q TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, genre TEXT DEFAULT '',
             mood TEXT DEFAULT '', bpm REAL, ext TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
@@ -506,6 +508,258 @@ def yt_search(q):
     return items
 
 
+# ---------- YouTube music catalog (video IDs from kworb.net public lists; played only via the official player) ----------
+YT_LISTS = {"daily": "https://kworb.net/youtube/", "top": "https://kworb.net/youtube/topvideos.html",
+            "trending": "https://kworb.net/youtube/trending_music.html"}
+_YT_ROW = re.compile(r'<a href="(?:/youtube/trending/)?video/([A-Za-z0-9_-]{11})\.html">(.*?)</a>(.*?)</tr>', re.S)
+_YT_NOISE = re.compile(r"\s*[\(\[\|][^\)\]]*?(official|video|audio|lyric|letra|visualizer|mv|m/v|hd|4k|live|en vivo|clip)[^\)\]]*[\)\]]?", re.I)
+_yt_lists, _yt_lock = {}, threading.Lock()
+
+
+def split_artist_title(raw):
+    t = _html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
+    t = re.sub(r"\s+", " ", t)
+    clean = _YT_NOISE.sub("", t).strip(" -|")
+    clean = re.sub(r"\s+(official\s+)?(music\s+)?(m/?v|video|audio)\s*$", "", clean, flags=re.I).strip()
+    for sep in (" - ", " – ", " — ", " | "):
+        if sep in clean:
+            a, b = clean.split(sep, 1)
+            b = re.split(r"\s\|\|?\s|\s//\s", b)[0]
+            return a.strip(), b.strip(" -")[:120], t
+    return "", clean[:120], t
+
+
+def yt_list(name):
+    now = time.time()
+    with _yt_lock:
+        hit = _yt_lists.get(name)
+        if hit and now - hit[0] < 6 * 3600:
+            return hit[1]
+    req = urllib.request.Request(YT_LISTS[name], headers={"User-Agent": "Mozilla/5.0 EchoMusic"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        page = r.read(6_000_000).decode("utf-8", "replace")
+    items, seen = [], set()
+    for vid, raw, rest in _YT_ROW.findall(page):
+        if vid in seen:
+            continue
+        seen.add(vid)
+        artist, title, full = split_artist_title(raw)
+        nums = [int(n.replace(",", "")) for n in re.findall(r"<td>([\d,]{4,})</td>", rest)]
+        hl = re.search(r'<div>(#[^<]+)</div>', rest)
+        items.append({"videoId": vid, "artist": artist, "title": title or full, "full": full,
+                      "views": nums[0] if nums else None, "rank": len(items) + 1,
+                      "regions": re.findall(r"#\d+ ([A-Za-z ]+)", hl.group(1)) if hl else []})
+        if len(items) >= 2500:
+            break
+    if items:
+        with _yt_lock:
+            _yt_lists[name] = (now, items)
+    return items
+
+
+def yt_bad_ids():
+    with db() as con:
+        return {r["id"] for r in con.execute("SELECT id FROM yt_bad")}
+
+
+# ---------- playlist import by link (Spotify, Apple Music, Deezer, YouTube / YouTube Music) ----------
+# Only public track lists are read (titles and artists). Audio is never fetched from these services: the site then
+# finds each song in its own playable sources (uploads, Audius, Jamendo, YouTube official player).
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
+_import_cache, _import_lock = {}, threading.Lock()
+
+
+def _get(url, headers=None, limit=8_000_000):
+    h = {"User-Agent": BROWSER_UA, "Accept-Language": "en-US,en;q=0.8", **(headers or {})}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=25) as r:
+        return r.read(limit).decode("utf-8", "replace")
+
+
+def _walk(o):
+    if isinstance(o, dict):
+        yield o
+        for v in o.values():
+            yield from _walk(v)
+    elif isinstance(o, list):
+        for v in o:
+            yield from _walk(v)
+
+
+def import_spotify(kind, sid):
+    page = _get(f"https://open.spotify.com/embed/{kind}/{sid}")
+    m = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', page, re.S)
+    if not m:
+        raise ValueError("Spotify не отдал список треков")
+    data = json.loads(m.group(1))
+    ent = next((d for d in _walk(data) if isinstance(d.get("trackList"), list) or (d.get("type") == "track" and d.get("title"))), None)
+    if not ent:
+        raise ValueError("Не удалось прочитать плейлист Spotify")
+    name = ent.get("name") or ent.get("title") or "Spotify"
+    tracks = []
+    if isinstance(ent.get("trackList"), list):
+        for t in ent["trackList"]:
+            tracks.append({"title": t.get("title", ""), "artist": t.get("subtitle", ""), "duration": round((t.get("duration") or 0) / 1000)})
+    else:
+        artists = ", ".join(a.get("name", "") for a in ent.get("artists", []) if isinstance(a, dict))
+        tracks.append({"title": ent.get("title", ""), "artist": artists or ent.get("subtitle", ""), "duration": round((ent.get("duration") or 0) / 1000)})
+    return "Spotify", name, tracks
+
+
+def import_apple(url):
+    page = _get(url)
+    m = re.search(r'<script type="application/json" id="serialized-server-data">(.*?)</script>', page, re.S)
+    title = re.search(r'<meta property="og:title" content="([^"]*)"', page)
+    if not m:
+        raise ValueError("Apple Music не отдал список треков")
+    data = json.loads(m.group(1))
+    tracks, seen = [], set()
+    for d in _walk(data):
+        name = d.get("title") or d.get("name")
+        artist = d.get("artistName") or (d.get("subtitleLinks") or [{}])[0].get("title") if isinstance(d.get("subtitleLinks"), list) else d.get("artistName")
+        if isinstance(name, str) and isinstance(artist, str) and (d.get("duration") or d.get("durationInMilliseconds") or "contentDescriptor" in d):
+            key = (name.lower(), artist.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            dur = d.get("duration") or d.get("durationInMilliseconds") or 0
+            tracks.append({"title": name, "artist": artist, "duration": round(dur / 1000) if dur > 10000 else dur})
+    return "Apple Music", _html.unescape(title.group(1)).split(" on Apple Music")[0] if title else "Apple Music", tracks
+
+
+def import_deezer(kind, did):
+    base = json.loads(_get(f"https://api.deezer.com/{kind}/{did}"))
+    if base.get("error"):
+        raise ValueError("Deezer: " + str(base["error"].get("message", "ошибка")))
+    if kind == "track":
+        return "Deezer", base.get("title", "Deezer"), [{"title": base.get("title", ""), "artist": (base.get("artist") or {}).get("name", ""), "duration": base.get("duration", 0)}]
+    items, url = [], f"https://api.deezer.com/{kind}/{did}/tracks?limit=200"
+    while url and len(items) < 1000:
+        page = json.loads(_get(url))
+        items += page.get("data", [])
+        url = page.get("next")
+    return "Deezer", base.get("title", "Deezer"), [{"title": t.get("title", ""), "artist": (t.get("artist") or {}).get("name", ""), "duration": t.get("duration", 0)} for t in items]
+
+
+def import_youtube(list_id=None, video_id=None):
+    if video_id and not list_id:
+        o = json.loads(_get(f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"))
+        a, t, _ = split_artist_title(o.get("title", ""))
+        return "YouTube", o.get("title", "YouTube"), [{"title": t, "artist": a or o.get("author_name", ""), "videoId": video_id}]
+    page = _get(f"https://www.youtube.com/playlist?list={list_id}", {"Cookie": "SOCS=CAI; CONSENT=YES+1"})
+    m = re.search(r"var ytInitialData = (\{.*?\});</script>", page, re.S)
+    if not m:
+        raise ValueError("YouTube не отдал плейлист (возможно, он закрытый)")
+    data = json.loads(m.group(1))
+    title = next((d["title"] for d in _walk(data) if d.get("@type") == "playlist" and "title" in d), None)
+    meta = next((d for d in _walk(data) if "playlistMetadataRenderer" in d), None)
+    if meta:
+        title = meta["playlistMetadataRenderer"].get("title", title)
+    tracks = []
+    for d in _walk(data):
+        lv = d.get("lockupViewModel")
+        if lv and lv.get("contentType") == "LOCKUP_CONTENT_TYPE_VIDEO" and re.fullmatch(r"[A-Za-z0-9_-]{11}", lv.get("contentId", "")):
+            md = (lv.get("metadata") or {}).get("lockupMetadataViewModel") or {}
+            raw = ((md.get("title") or {}).get("content")) or ""
+            ch = re.search(r'"a11yLabel": ?"Go to channel ([^"]+)"', json.dumps(md, ensure_ascii=False))
+            channel = ch.group(1) if ch else ""
+            a, t, _ = split_artist_title(raw)
+            if not a and " - " not in raw:
+                a = channel
+            tracks.append({"title": t or raw, "artist": re.sub(r"\s*-\s*Topic$|VEVO$", "", a or channel), "videoId": lv["contentId"]})
+            continue
+        r = d.get("playlistVideoRenderer")
+        if not r or not r.get("videoId"):
+            continue
+        raw = "".join(x.get("text", "") for x in (r.get("title") or {}).get("runs", []))
+        channel = "".join(x.get("text", "") for x in (r.get("shortBylineText") or {}).get("runs", []))
+        a, t, _ = split_artist_title(raw)
+        tracks.append({"title": t or raw, "artist": a or re.sub(r"\s*-\s*Topic$|VEVO$", "", channel), "videoId": r["videoId"],
+                       "duration": int(r.get("lengthSeconds") or 0)})
+    return "YouTube", title or "YouTube", tracks
+
+
+def import_link(url):
+    u = url.strip()
+    with _import_lock:
+        hit = _import_cache.get(u)
+        if hit and time.time() - hit[0] < 3600:
+            return hit[1]
+    m = re.match(r"https?://open\.spotify\.com/(?:intl-[a-z-]+/)?(playlist|album|track)/([A-Za-z0-9]{10,30})", u)
+    if m:
+        service, name, tracks = import_spotify(m.group(1), m.group(2))
+    elif re.match(r"https?://(?:music|itunes)\.apple\.com/", u):
+        service, name, tracks = import_apple(u)
+    elif (m := re.match(r"https?://(?:www\.)?deezer\.com/(?:[a-z]{2}/)?(playlist|album|track)/(\d+)", u)):
+        service, name, tracks = import_deezer(m.group(1), m.group(2))
+    elif re.match(r"https?://(?:www\.|music\.|m\.)?(?:youtube\.com|youtu\.be)/", u):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(u).query)
+        vid = (q.get("v") or [None])[0] or (re.search(r"youtu\.be/([A-Za-z0-9_-]{11})", u) or [None, None])[1]
+        lst = (q.get("list") or [None])[0]
+        if lst and not re.fullmatch(r"[A-Za-z0-9_-]{10,64}", lst):
+            raise ValueError("Неверная ссылка на плейлист")
+        if vid and not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+            raise ValueError("Неверная ссылка на видео")
+        service, name, tracks = import_youtube(lst, vid)
+    elif re.match(r"https?://music\.yandex\.(ru|com|by|kz)/", u):
+        raise ValueError("Яндекс Музыка отдаёт плейлисты только российским адресам, а сервер сайта за рубежом. Пока не поддерживается.")
+    else:
+        raise ValueError("Ссылка не распознана. Поддерживаются Spotify, Apple Music, Deezer, YouTube и YouTube Music.")
+    for t in tracks:
+        t["artist"] = re.sub(r"\s+", " ", (t.get("artist") or "").replace("\xa0", " ")).strip()
+        t["title"] = re.sub(r"\s+", " ", (t.get("title") or "").replace("\xa0", " ")).strip()
+    tracks = [t for t in tracks if t.get("title") and t["title"] != name][:1000]
+    out = {"service": service, "name": name, "tracks": tracks}
+    with _import_lock:
+        if len(_import_cache) > 200:
+            _import_cache.clear()
+        _import_cache[u] = (time.time(), out)
+    return out
+
+
+# ---------- song lyrics (LRCLIB, open lyrics database; synced LRC when available) ----------
+_LYR_JUNK = re.compile(r"\s*[\(\[][^\)\]]*(official|video|audio|lyric|visualizer|mv|hd|4k|prod\.?)[^\)\]]*[\)\]]", re.I)
+
+
+def clean_title(title, artist):
+    t = _LYR_JUNK.sub("", title or "").strip()
+    if " - " in t and (not artist or artist.lower() in t.lower().split(" - ")[0]):
+        a, t = t.split(" - ", 1)
+        artist = artist or a
+    t = re.sub(r"\s*(feat\.?|ft\.?)\s.*$", "", t, flags=re.I).strip()
+    return t, (artist or "").split(",")[0].strip()
+
+
+def lyrics(artist, title, duration):
+    t, a = clean_title(title, artist)
+    key = f"{a.lower()}|{t.lower()}"[:300]
+    now = int(time.time())
+    with db() as con:
+        row = con.execute("SELECT data, at FROM lyrics_cache WHERE k=?", (key,)).fetchone()
+    if row and now - row["at"] < 30 * 86400:
+        return json.loads(row["data"])
+    hdr = {"User-Agent": "EchoMusic/1.0 (+https://music.maxsim.space)"}
+    found = None
+    try:
+        q = urllib.parse.urlencode({"artist_name": a, "track_name": t, **({"duration": int(duration)} if duration else {})})
+        with urllib.request.urlopen(urllib.request.Request(f"https://lrclib.net/api/get?{q}", headers=hdr), timeout=12) as r:
+            found = json.loads(r.read(2_000_000))
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    if not found or not (found.get("syncedLyrics") or found.get("plainLyrics")):
+        q = urllib.parse.urlencode({"q": f"{a} {t}".strip()})
+        with urllib.request.urlopen(urllib.request.Request(f"https://lrclib.net/api/search?{q}", headers=hdr), timeout=12) as r:
+            res = [x for x in json.loads(r.read(4_000_000)) if x.get("syncedLyrics") or x.get("plainLyrics")]
+        if duration:
+            res.sort(key=lambda x: (not x.get("syncedLyrics"), abs((x.get("duration") or 0) - duration)))
+        found = res[0] if res and (not duration or abs((res[0].get("duration") or 0) - duration) < 15) else None
+    data = {"synced": (found or {}).get("syncedLyrics") or "", "plain": (found or {}).get("plainLyrics") or "",
+            "instrumental": bool((found or {}).get("instrumental")), "source": "LRCLIB" if found else ""}
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO lyrics_cache(k,data,at) VALUES(?,?,?)", (key, json.dumps(data, ensure_ascii=False), now))
+    return data
+
+
 # ---------- rate limits ----------
 _hits, _hits_lock = {}, threading.Lock()
 
@@ -709,6 +963,48 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path.startswith(("/api/au/", "/api/ja/")):
             return self.catalog(path, parsed.query)
+        if path == "/api/yt/catalog":
+            name = (urllib.parse.parse_qs(parsed.query).get("list") or ["daily"])[0]
+            if name not in YT_LISTS:
+                return self.err(404, "Нет такого списка")
+            try:
+                bad = yt_bad_ids()
+                return self.send_json({"list": name, "data": [v for v in yt_list(name) if v["videoId"] not in bad]})
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                print("yt catalog error:", type(e).__name__, e, flush=True)
+                return self.err(504, "Каталог YouTube сейчас недоступен")
+        m = re.fullmatch(r"/api/yt/thumb/([A-Za-z0-9_-]{11})", path)
+        if m:
+            return self.proxy(f"https://i.ytimg.com/vi/{m.group(1)}/hqdefault.jpg", cache="public, max-age=604800", kinds=("image/",))
+        if path == "/api/import":
+            url = (urllib.parse.parse_qs(parsed.query).get("url") or [""])[0].strip()[:500]
+            if not url.startswith(("http://", "https://")):
+                return self.err(400, "Вставьте ссылку на плейлист, альбом или трек")
+            if limited("imp:" + self.ip(), 40, 3600):
+                return self.err(429, "Слишком много импортов, подождите немного")
+            try:
+                return self.send_json(import_link(url))
+            except ValueError as e:
+                return self.err(400, str(e))
+            except (urllib.error.URLError, TimeoutError, OSError, KeyError, TypeError) as e:
+                print("import error:", type(e).__name__, e, flush=True)
+                return self.err(504, "Сервис не ответил. Проверьте, что плейлист открытый, и попробуйте ещё раз.")
+        if path == "/api/lyrics":
+            qs = urllib.parse.parse_qs(parsed.query)
+            g = lambda k: (qs.get(k) or [""])[0].strip()[:200]
+            if not g("title"):
+                return self.err(400, "Нет названия")
+            if limited("lyr:" + self.ip(), 120, 3600):
+                return self.err(429, "Слишком много запросов")
+            try:
+                dur = float(g("duration") or 0)
+            except ValueError:
+                dur = 0
+            try:
+                return self.send_json(lyrics(g("artist"), g("title"), dur))
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+                print("lyrics error:", type(e).__name__, e, flush=True)
+                return self.err(504, "Тексты сейчас недоступны")
         if path == "/api/yt/search":
             if not CFG["youtube"]:
                 return self.err(503, "YouTube не подключён: нужен YOUTUBE_API_KEY на сервере")
@@ -783,6 +1079,16 @@ class Handler(BaseHTTPRequestHandler):
                 if limited(f"ai:{u['id']}", 40, 86400) or limited("ai:all", 400, 86400):
                     return self.send_json({"plan": rule_plan(prompt), "limited": True})
                 return self.send_json({"plan": ai_plan(prompt)})
+            if path == "/api/yt/bad":
+                body = self.read_json() or {}
+                vid = str(body.get("id", ""))
+                if not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+                    return self.err(400, "Неверный id")
+                if limited("ytbad:" + self.ip(), 200, 3600):
+                    return self.err(429, "Слишком много запросов")
+                with db() as con:
+                    con.execute("INSERT INTO yt_bad(id,n,at) VALUES(?,1,?) ON CONFLICT(id) DO UPDATE SET n=n+1, at=excluded.at", (vid, int(time.time())))
+                return self.send_json({"ok": True})
             if path == "/api/uploads":
                 return self.upload_audio()
             m = re.fullmatch(r"/api/uploads/([a-f0-9]{16})/cover", path)

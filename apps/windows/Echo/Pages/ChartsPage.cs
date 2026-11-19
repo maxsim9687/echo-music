@@ -87,7 +87,7 @@ public sealed class ChartsPage : PageBase
         var st = U.Muted(it.Streams > 0 ? it.Streams.ToString("N0", Ru) : "", 13); st.VerticalAlignment = VerticalAlignment.Center; st.HorizontalAlignment = HorizontalAlignment.Right;
         Grid.SetColumn(st, 3); g.Children.Add(st);
         var res = ChartMatch.Cached(cc, it);
-        var find = U.ChipBtn(res != null ? ChartMatch.Label[res.Kind] : "Найти на Audius", null, () => { });
+        var find = Btns.Make(new Button { Content = new TextBlock { Text = res != null ? ChartMatch.Label[res.Kind] : "Найти на Audius", FontFamily = Theme.BodyFont, FontSize = 13 } }, BtnKind.Find);
         find.VerticalAlignment = VerticalAlignment.Center;
         if (res != null) StyleFind(find, res.Kind);
         findBtns[it.Pos] = find;
@@ -116,8 +116,7 @@ public sealed class ChartsPage : PageBase
     {
         if (b.Content is TextBlock tb) tb.Text = ChartMatch.Label[k];
         else if (b.Content is StackPanel sp && sp.Children.OfType<TextBlock>().FirstOrDefault() is TextBlock t2) t2.Text = ChartMatch.Label[k];
-        U.SetChipBtnOn(b, k == ChartMatch.Kind.Orig);
-        b.Opacity = k == ChartMatch.Kind.None ? 0.55 : 1;
+        Btns.SetVariant(b, k == ChartMatch.Kind.Orig ? "orig" : k == ChartMatch.Kind.Ver ? "ver" : "none");
     }
 
     void Mark(ChartItem it, ChartMatch.Result r)

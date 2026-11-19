@@ -8,10 +8,27 @@ export function fromYouTube(v, hint = {}) {
   return {
     id: "yt:" + v.videoId, src: "youtube", rawId: v.videoId,
     title: hint.title || v.title, artist: hint.artist || v.channel, artistId: "yt:" + (hint.artist || v.channel || "").toLowerCase(),
-    channel: v.channel, cover: v.thumb, coverSm: v.thumb, duration: 0, genre: "", mood: "", tags: [],
+    channel: v.channel, cover: `/api/yt/thumb/${v.videoId}`, coverSm: `/api/yt/thumb/${v.videoId}`, duration: 0, genre: "", mood: "", tags: [],
     bpm: null, plays: 0, downloadable: false, quality: "YouTube", stream: "", link: `https://www.youtube.com/watch?v=${v.videoId}`,
   };
 }
+// A YouTube hit from the public charts: full song, played only through the official embedded player.
+const LATIN = new Set(["mexico", "argentina", "colombia", "chile", "peru", "spain", "brazil", "puerto rico"]);
+export function fromYouTubeCatalog(v, list) {
+  const artist = v.artist || "YouTube";
+  const regions = (v.regions || []).map((r) => r.trim().toLowerCase());
+  return {
+    id: "yt:" + v.videoId, src: "youtube", rawId: v.videoId, title: v.title, artist,
+    artistId: "yt:" + artist.split(",")[0].trim().toLowerCase(), channel: "YouTube",
+    cover: `/api/yt/thumb/${v.videoId}`, coverSm: `/api/yt/thumb/${v.videoId}`, duration: 0, genre: "", mood: "",
+    tags: ["youtube", list === "top" ? "classic hit" : "hit", ...(regions.some((r) => LATIN.has(r)) ? ["latin"] : []), ...regions.slice(0, 3)],
+    bpm: null, plays: v.views || 0, views: v.views || 0, downloadable: false, quality: "YouTube",
+    stream: "", link: `https://www.youtube.com/watch?v=${v.videoId}`,
+  };
+}
+export const spotifySearchUrl = (t) => `https://open.spotify.com/search/${encodeURIComponent(`${t.artist} ${t.title}`.trim())}`;
+export const importLink = (url) => api(`/api/import?url=${encodeURIComponent(url)}`);
+export const reportBadYouTube = (id) => api("/api/yt/bad", { method: "POST", body: { id } }).catch(() => {});
 export async function ytSearch(q) {
   if (!YON) return [];
   return ((await getJSON(`/api/yt/search?q=${encodeURIComponent(q)}`, {}, 60 * 60e3)).data || []);
@@ -67,8 +84,9 @@ function fromAudius(t) {
 const okAudius = (t) => t && t.is_streamable !== false && !t.is_stream_gated && t.duration >= 60 && t.duration <= 1500 && !EXCLUDE.has(g0(t.genre));
 const auList = (d) => (d.data || []).filter(okAudius).map(fromAudius);
 
-export async function auTrending({ genre, time = "week", limit = 40 } = {}) {
+export async function auTrending({ genre, time = "week", limit = 40, offset = 0 } = {}) {
   const q = new URLSearchParams({ time, limit });
+  if (offset) q.set("offset", offset);
   if (genre) q.set("genre", genre);
   return auList(await getJSON(`${AU}/tracks/trending?${q}`, {}, 10 * 60e3));
 }
@@ -109,8 +127,8 @@ async function jamendo(params) {
   return (d.results || []).filter((t) => t.audio && +t.duration >= 60).map(fromJamendo);
 }
 export const jaSearch = (query, limit = 30) => jamendo({ search: query, limit, order: "relevance" });
-export const jaPopular = ({ tags, limit = 30, instrumental } = {}) =>
-  jamendo({ limit, order: "popularity_month", ...(tags ? { fuzzytags: tags } : {}), ...(instrumental ? { vocalinstrumental: "instrumental" } : {}) });
+export const jaPopular = ({ tags, limit = 30, instrumental, offset = 0, order = "popularity_month" } = {}) =>
+  jamendo({ limit, order, ...(offset ? { offset } : {}), ...(tags ? { fuzzytags: tags } : {}), ...(instrumental ? { vocalinstrumental: "instrumental" } : {}) });
 
 // ---- own uploads ----
 function fromLocal(u) {
