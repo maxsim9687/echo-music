@@ -53,6 +53,7 @@ CFG = {
     "site_url": os.environ.get("SITE_URL", "http://localhost:8765").rstrip("/"),
     "admins": {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()},
     "jamendo": os.environ.get("JAMENDO_CLIENT_ID", ""),
+    "youtube": os.environ.get("YOUTUBE_API_KEY", ""),
     "port": int(os.environ.get("PORT", "8765") or 8765),
 }
 SECURE_COOKIE = CFG["site_url"].startswith("https://")
@@ -99,6 +100,7 @@ def init_db():
             tries INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS profiles(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS yt_cache(q TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, genre TEXT DEFAULT '',
             mood TEXT DEFAULT '', bpm REAL, ext TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
             cover TEXT DEFAULT '', created INTEGER NOT NULL, user_id INTEGER);
@@ -476,6 +478,34 @@ def spotify_chart(cc):
     return data
 
 
+# ---------- YouTube (official embedded player only: listening, no downloads) ----------
+def yt_search(q):
+    """Search music videos via YouTube Data API v3. Results are cached in SQLite for 14 days because the free
+    quota is ~100 searches a day."""
+    key = q.lower().strip()[:120]
+    now = int(time.time())
+    with db() as con:
+        row = con.execute("SELECT data, at FROM yt_cache WHERE q=?", (key,)).fetchone()
+    if row and now - row["at"] < 14 * 86400:
+        return json.loads(row["data"])
+    if limited("yt:all", 90, 86400):
+        raise RuntimeError("quota")
+    params = urllib.parse.urlencode({"part": "snippet", "type": "video", "videoCategoryId": "10", "maxResults": "6",
+                                     "videoEmbeddable": "true", "q": q[:120], "key": CFG["youtube"]})
+    with urllib.request.urlopen(urllib.request.Request(f"https://www.googleapis.com/youtube/v3/search?{params}", headers=UA), timeout=15) as r:
+        data = json.loads(r.read(2_000_000))
+    items = []
+    for it in data.get("items", []):
+        vid = (it.get("id") or {}).get("videoId")
+        sn = it.get("snippet") or {}
+        if vid and re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
+            items.append({"videoId": vid, "title": _html.unescape(sn.get("title", "")), "channel": _html.unescape(sn.get("channelTitle", "")),
+                          "thumb": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"})
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO yt_cache(q,data,at) VALUES(?,?,?)", (key, json.dumps(items, ensure_ascii=False), now))
+    return items
+
+
 # ---------- rate limits ----------
 _hits, _hits_lock = {}, threading.Lock()
 
@@ -511,8 +541,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                         "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+                         "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                         "font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://i.ytimg.com; media-src 'self' blob:; connect-src 'self'; "
+                         "frame-src https://www.youtube-nocookie.com https://www.youtube.com; "
                          "frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
         super().end_headers()
 
@@ -678,6 +709,21 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path.startswith(("/api/au/", "/api/ja/")):
             return self.catalog(path, parsed.query)
+        if path == "/api/yt/search":
+            if not CFG["youtube"]:
+                return self.err(503, "YouTube не подключён: нужен YOUTUBE_API_KEY на сервере")
+            q = (urllib.parse.parse_qs(parsed.query).get("q") or [""])[0].strip()
+            if len(q) < 2:
+                return self.err(400, "Слишком короткий запрос")
+            if limited("yt-ip:" + self.ip(), 60, 3600):
+                return self.err(429, "Слишком много запросов к YouTube, подождите")
+            try:
+                return self.send_json({"data": yt_search(q)})
+            except RuntimeError:
+                return self.err(429, "Дневной лимит поиска по YouTube исчерпан, попробуйте завтра")
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+                print("youtube error:", type(e).__name__, e, flush=True)
+                return self.err(504, "YouTube не ответил")
         if path == "/api/charts":
             return self.send_json({"charts": [{"id": k, "name": v} for k, v in CHARTS.items()]})
         m = re.fullmatch(r"/api/charts/([a-z]{2,6})", path)
@@ -694,7 +740,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":
             u = self.user()
             return self.send_json({"user": {"email": u["email"], "role": self.role(u)} if u else None,
-                                   "jamendo": bool(CFG["jamendo"])})
+                                   "jamendo": bool(CFG["jamendo"]), "youtube": bool(CFG["youtube"])})
         if path == "/api/profile":
             u = self.user()
             if not u:

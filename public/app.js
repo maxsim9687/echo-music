@@ -1,7 +1,7 @@
-import * as A from "./api.js?v=6";
-import * as R from "./recs.js?v=6";
-import { createFx } from "./fx.js?v=6";
-import { downloadOptions, download } from "./download.js?v=6";
+import * as A from "./api.js?v=7";
+import * as R from "./recs.js?v=7";
+import { createFx } from "./fx.js?v=7";
+import { downloadOptions, download } from "./download.js?v=7";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -42,7 +42,7 @@ let me = null;
 async function refreshMe() {
   try {
     const d = await A.api("/api/me");
-    me = d.user; A.setJamendo(d.jamendo);
+    me = d.user; A.setJamendo(d.jamendo); A.setYouTube(d.youtube);
   } catch { me = null; }
   $("loginLink").hidden = !!me; $("acctIn").hidden = !me;
   if (me) { $("acctEmail").textContent = me.email; $("acctRole").textContent = me.role === "admin" ? "администратор" : "слушатель"; }
@@ -117,6 +117,47 @@ async function magicLogin() {
 const audio = $("audio");
 audio.volume = store.get("echo.vol", 80) / 100; $("vol").value = Math.round(audio.volume * 100);
 const pl = { queue: [], i: -1, mode: "list", mood: null, counted: false, startedAt: 0 };
+// ---- YouTube official IFrame player: used only for src "youtube" tracks ----
+const yt = { player: null, ready: null, playing: false, time: 0, dur: 0 };
+function ytLoad() {
+  if (yt.ready) return yt.ready;
+  yt.ready = new Promise((resolve, reject) => {
+    window.onYouTubeIframeAPIReady = () => {
+      yt.player = new YT.Player("ytplayer", {
+        host: "https://www.youtube-nocookie.com", width: "100%", height: "100%",
+        playerVars: { playsinline: 1, rel: 0, modestbranding: 1 },
+        events: {
+          onReady: () => resolve(yt.player),
+          onStateChange: (e) => {
+            yt.playing = e.data === YT.PlayerState.PLAYING;
+            if (e.data === YT.PlayerState.PLAYING) errRun = 0;
+            if (e.data === YT.PlayerState.ENDED) { const t = cur(); if (t) R.finished(t); next("end"); }
+            sync();
+          },
+          onError: () => { if (cur()?.src === "youtube") { toast("YouTube не даёт проиграть это видео, включаю следующее"); setTimeout(() => next("error"), 600); } },
+        },
+      });
+    };
+    const sc = document.createElement("script");
+    sc.src = "https://www.youtube.com/iframe_api"; sc.onerror = () => reject(new Error("YouTube недоступен"));
+    document.head.appendChild(sc);
+  });
+  return yt.ready;
+}
+setInterval(() => {
+  if (!yt.player?.getCurrentTime || cur()?.src !== "youtube") return;
+  yt.time = yt.player.getCurrentTime() || 0; yt.dur = yt.player.getDuration() || 0;
+  audio.dispatchEvent(new Event("timeupdate"));
+}, 500);
+const isYT = () => cur()?.src === "youtube";
+const eng = {
+  playing: () => (isYT() ? yt.playing : !!cur() && !audio.paused),
+  time: () => (isYT() ? yt.time : audio.currentTime),
+  dur: () => (isYT() ? yt.dur : audio.duration),
+  seek: (s) => { if (isYT()) yt.player?.seekTo(s, true); else audio.currentTime = s; },
+  play: () => (isYT() ? yt.player?.playVideo() : audio.play().catch(() => {})),
+  pause: () => (isYT() ? yt.player?.pauseVideo() : audio.pause()),
+};
 let waitingNext = false;
 const cur = () => pl.queue[pl.i];
 
@@ -128,8 +169,17 @@ function load(autoplay) {
   const t = cur(); if (!t) return;
   pl.counted = false;
   R.started(t);
-  audio.src = t.stream;
-  if (autoplay) audio.play().catch(() => {});
+  if (t.src === "youtube") {
+    audio.pause(); audio.removeAttribute("src");
+    $("ytbox").hidden = false; $("ytChannel").textContent = t.channel || t.artist; $("ytLink").href = t.link;
+    ytLoad().then((p) => { p.setVolume(Math.round(audio.volume * 100)); autoplay ? p.loadVideoById(t.rawId) : p.cueVideoById(t.rawId); })
+      .catch(() => { toast("YouTube не загрузился. В России он часто замедлен, попробуйте с VPN."); });
+  } else {
+    if (yt.player?.stopVideo) yt.player.stopVideo();
+    $("ytbox").hidden = true; yt.playing = false;
+    audio.src = t.stream;
+    if (autoplay) audio.play().catch(() => {});
+  }
   sync();
   if ("mediaSession" in navigator) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: t.title, artist: t.artist, album: t.genre || "Эхо", artwork: t.cover ? [{ src: t.cover, sizes: "480x480" }] : [] });
@@ -141,21 +191,21 @@ function load(autoplay) {
 }
 function next(reason = "skip") {
   const t = cur();
-  if (t && reason === "skip" && audio.currentTime < 30) R.skipped(t, audio.currentTime);
+  if (t && reason === "skip" && eng.time() < 30) R.skipped(t, eng.time());
   if (pl.i < pl.queue.length - 1) { pl.i++; load(true); }
   else if (pl.mode === "wave") { if (waitingNext) return; waitingNext = true; refillWave().then(() => { if (pl.i < pl.queue.length - 1) { pl.i++; load(true); } }).finally(() => { waitingNext = false; }); }
-  else { audio.pause(); sync(); }
+  else { eng.pause(); sync(); }
 }
-function prev() { if (audio.currentTime > 4 || pl.i <= 0) { audio.currentTime = 0; } else { pl.i--; load(true); } }
-function toggle() { if (!cur()) return startWave(); audio.paused ? audio.play().catch(() => {}) : audio.pause(); }
+function prev() { if (eng.time() > 4 || pl.i <= 0) { eng.seek(0); } else { pl.i--; load(true); } }
+function toggle() { if (!cur()) return startWave(); eng.playing() ? eng.pause() : eng.play(); }
 
 audio.addEventListener("play", sync); audio.addEventListener("pause", sync);
 audio.addEventListener("timeupdate", () => {
   const t = cur(); if (!t) return;
-  const d = audio.duration || t.duration || 0, p = d ? (audio.currentTime / d) * 100 : 0;
-  $("fill").style.width = p + "%"; $("mini").style.width = p + "%"; $("cur").textContent = fmt(audio.currentTime); $("dur").textContent = fmt(d);
+  const d = eng.dur() || t.duration || 0, p = d ? (eng.time() / d) * 100 : 0;
+  $("fill").style.width = p + "%"; $("mini").style.width = p + "%"; $("cur").textContent = fmt(eng.time()); $("dur").textContent = fmt(d);
   $("seek").setAttribute("aria-valuenow", Math.round(p));
-  if (!pl.counted && audio.currentTime > 30) { pl.counted = true; R.listened(t); }
+  if (!pl.counted && eng.time() > 30) { pl.counted = true; R.listened(t); }
 });
 audio.addEventListener("ended", () => { const t = cur(); if (t) R.finished(t); next("end"); });
 let errRun = 0;
@@ -163,7 +213,7 @@ audio.addEventListener("playing", () => { errRun = 0; });
 audio.addEventListener("error", () => {
   if (!cur() || !audio.getAttribute("src")) return;
   errRun++;
-  if (errRun >= 4) { errRun = 0; audio.pause(); sync(); return toast("Несколько треков подряд не загрузились. Проверьте соединение и нажмите плей ещё раз."); }
+  if (errRun >= 4) { errRun = 0; eng.pause(); sync(); return toast("Несколько треков подряд не загрузились. Проверьте соединение и нажмите плей ещё раз."); }
   toast("Трек не загрузился, включаю следующий"); setTimeout(() => next("error"), 600);
 });
 $("play").onclick = toggle; $("next").onclick = () => next(); $("prev").onclick = prev;
@@ -171,16 +221,16 @@ $("shuf").onclick = (e) => {
   const on = e.currentTarget.getAttribute("aria-pressed") !== "true"; e.currentTarget.setAttribute("aria-pressed", String(on));
   if (on && pl.queue.length > pl.i + 2) { const rest = pl.queue.splice(pl.i + 1); rest.sort(() => Math.random() - 0.5); pl.queue.push(...rest); }
 };
-$("seek").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (audio.duration) audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration; };
-$("seek").onkeydown = (e) => { if (e.key === "ArrowRight") audio.currentTime += 5; if (e.key === "ArrowLeft") audio.currentTime -= 5; };
-$("vol").oninput = (e) => { audio.volume = e.target.value / 100; store.set("echo.vol", +e.target.value); };
+$("seek").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (eng.dur()) eng.seek(((e.clientX - r.left) / r.width) * eng.dur()); };
+$("seek").onkeydown = (e) => { if (e.key === "ArrowRight") eng.seek(eng.time() + 5); if (e.key === "ArrowLeft") eng.seek(Math.max(0, eng.time() - 5)); };
+$("vol").oninput = (e) => { audio.volume = e.target.value / 100; yt.player?.setVolume?.(+e.target.value); store.set("echo.vol", +e.target.value); };
 const doLike = (t) => { if (!t) return; const on = R.like(t); toast(on ? "Добавлено в любимое" : "Убрано из любимого"); sync(); if (!$("v-welcome").hidden) $("wlSummary").textContent = `Песен в любимом: ${Object.keys(R.P.likes).length}`; };
 $("npLike").onclick = () => doLike(cur()); $("wLike").onclick = () => doLike(cur());
 $("wBan").onclick = () => { const t = cur(); if (!t) return; R.ban(t); toast("Больше не покажу похожее так часто"); next("ban"); };
 $("npDl").onclick = (e) => openDlMenu(cur(), e.currentTarget);
 if ("mediaSession" in navigator) {
-  navigator.mediaSession.setActionHandler("play", () => audio.play());
-  navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+  navigator.mediaSession.setActionHandler("play", () => eng.play());
+  navigator.mediaSession.setActionHandler("pause", () => eng.pause());
   navigator.mediaSession.setActionHandler("nexttrack", () => next());
   navigator.mediaSession.setActionHandler("previoustrack", prev);
 }
@@ -191,7 +241,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 function sync() {
-  const t = cur(), playing = !!t && !audio.paused;
+  const t = cur(), playing = !!t && eng.playing();
   fx.energy(playing);
   $("player").classList.toggle("playing", playing);
   $("wave").classList.toggle("playing", playing && pl.mode === "wave");
@@ -373,7 +423,7 @@ function closeMenu() { menu?.remove(); menu = null; }
 function openDlMenu(t, anchor) {
   closeMenu(); if (!t) return;
   const opts = downloadOptions(t);
-  if (!opts.length) return toast("Автор этого трека не разрешил скачивание");
+  if (!opts.length) return toast(t.src === "youtube" ? "С YouTube можно только слушать, скачивания нет" : "Автор этого трека не разрешил скачивание");
   menu = document.createElement("div"); menu.className = "menu"; menu.setAttribute("role", "menu");
   menu.innerHTML = opts.map((o, i) => `<button type="button" role="menuitem" data-i="${i}"><b>${esc(o.label)}</b><small>${esc(o.note)}</small></button>`).join("");
   document.body.appendChild(menu);
@@ -508,8 +558,21 @@ async function runSearch() {
   const { list, failed } = await A.searchAll(q, { src: srcFilter, onlyDl });
   if (failed) { $("results").innerHTML = `<div class="status err">Поиск не ответил. Проверьте интернет.</div>`; return; }
   $("srNote").textContent = `найдено: ${list.length}`;
+  if (A.hasYouTube()) $("srNote").innerHTML = `найдено: ${list.length} · <button class="linkbtn" type="button" id="ytFind">искать на YouTube</button>`;
   rows($("results"), list, onlyDl ? "Нет треков со скачиванием по этому запросу" : `По запросу «${q}» ничего нет. Попробуйте на английском или другой жанр.`);
 }
+document.addEventListener("click", async (e) => {
+  if (e.target.id !== "ytFind") return;
+  const q = $("q").value.trim(); if (!q) return;
+  e.target.textContent = "ищу…";
+  try {
+    const vids = await A.ytSearch(q);
+    const list = vids.map((v) => A.fromYouTube(v));
+    const cur0 = lists.get("results") || [];
+    rows($("results"), [...list, ...cur0], "Ничего не нашлось");
+    $("srNote").textContent = `YouTube: ${list.length} · всего ${list.length + cur0.length}`;
+  } catch (err) { toast(err.message); e.target.textContent = "искать на YouTube"; }
+});
 $("q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(runSearch, 350); });
 $("fDl").onclick = (e) => { onlyDl = !onlyDl; e.currentTarget.setAttribute("aria-pressed", String(onlyDl)); runSearch(); };
 document.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => {
@@ -599,6 +662,7 @@ async function renderCharts() {
       <span class="tt"><b>${esc(it.title)}</b><span>${esc([it.artist, ...it.with].join(", "))}</span></span>
       <span class="st">${it.streams ? it.streams.toLocaleString("ru-RU") : ""}</span>
       <button class="find ${res ? res.kind : ""}" type="button">${res ? KIND[res.kind] : "Найти на Audius"}</button>
+      ${A.hasYouTube() ? `<button class="yt-btn" type="button" data-yt="${it.pos}" title="Оригинал через официальный плеер YouTube">▶ YouTube</button>` : "<span></span>"}
       <a class="ext" href="https://open.spotify.com/track/${encodeURIComponent(it.spotify)}" target="_blank" rel="noopener" aria-label="Открыть в Spotify" title="Открыть в Spotify"><svg class="i"><use href="#i-ext"/></svg></a>
     </div><div class="matches" hidden></div></div>`;
   }).join("");
@@ -611,6 +675,18 @@ async function renderCharts() {
 }
 $("chCountries").onclick = (e) => { const b = e.target.closest(".mood"); if (!b) return; chCountry = b.dataset.c; store.set("echo.chart", chCountry); renderCharts(); };
 $("chList").addEventListener("click", async (e) => {
+  const yb = e.target.closest("[data-yt]");
+  if (yb && chData) {
+    const it = chData.items.find((x) => x.pos === +yb.dataset.yt);
+    yb.disabled = true;
+    try {
+      const vids = await A.ytSearch(`${it.artist} ${it.title}`);
+      if (!vids.length) toast("На YouTube не нашлось");
+      else playList([A.fromYouTube(vids[0], { title: it.title, artist: [it.artist, ...it.with].join(", ") })], 0, "list");
+    } catch (err) { toast(err.message); }
+    yb.disabled = false;
+    return;
+  }
   const b = e.target.closest(".find"); if (!b || !chData) return;
   const row = b.closest(".crow"), it = chData.items.find((x) => x.pos === +row.dataset.pos), box = row.querySelector(".matches");
   if (!box.hidden) { box.hidden = true; return; }

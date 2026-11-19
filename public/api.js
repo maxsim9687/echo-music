@@ -1,6 +1,21 @@
 // Music sources: Audius (no key), Jamendo (free client id), and the site's own uploads.
 const AU = "/api/au"; // proxied through our server: Audius is blocked in some networks
-let JON = false;
+let JON = false, YON = false;
+export const setYouTube = (on) => { YON = !!on; };
+export const hasYouTube = () => YON;
+// YouTube: listening only through the official embedded player. No stream extraction, no downloads.
+export function fromYouTube(v, hint = {}) {
+  return {
+    id: "yt:" + v.videoId, src: "youtube", rawId: v.videoId,
+    title: hint.title || v.title, artist: hint.artist || v.channel, artistId: "yt:" + (hint.artist || v.channel || "").toLowerCase(),
+    channel: v.channel, cover: v.thumb, coverSm: v.thumb, duration: 0, genre: "", mood: "", tags: [],
+    bpm: null, plays: 0, downloadable: false, quality: "YouTube", stream: "", link: `https://www.youtube.com/watch?v=${v.videoId}`,
+  };
+}
+export async function ytSearch(q) {
+  if (!YON) return [];
+  return ((await getJSON(`/api/yt/search?q=${encodeURIComponent(q)}`, {}, 60 * 60e3)).data || []);
+}
 export const setJamendo = (on) => { JON = !!on; };
 export const hasJamendo = () => JON;
 
