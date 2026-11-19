@@ -1,8 +1,8 @@
-import * as A from "./api.js?v=10";
-import * as R from "./recs.js?v=10";
-import { createFx } from "./fx.js?v=10";
-import { downloadOptions, download } from "./download.js?v=10";
-import * as E from "./engine.js?v=10";
+import * as A from "./api.js?v=13";
+import * as R from "./recs.js?v=13";
+import { createFx } from "./fx.js?v=13";
+import { downloadOptions, download } from "./download.js?v=13";
+import * as E from "./engine.js?v=13";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -43,7 +43,7 @@ let me = null;
 async function refreshMe() {
   try {
     const d = await A.api("/api/me");
-    me = d.user; A.setJamendo(d.jamendo); A.setYouTube(d.youtube);
+    me = d.user; A.setJamendo(d.jamendo); A.setYouTube(d.youtube); A.setSpotify(d.spotify);
   } catch { me = null; }
   $("loginLink").hidden = !!me; $("acctIn").hidden = !me;
   if (me) { $("acctEmail").textContent = me.email; $("acctRole").textContent = me.role === "admin" ? "администратор" : "слушатель"; }
@@ -158,13 +158,68 @@ setInterval(() => {
 }, 500);
 const isYT = () => cur()?.src === "youtube";
 let ytFails = 0;
-function ytFail(videoOnly = false) {
+function ytFail(videoOnly = false, why = "") {
   ytFails++;
+  const t = cur();
   if (!videoOnly || ytFails >= 3) {
-    if (!ytBroken) toast("YouTube сейчас не открывается (в России он часто замедлен). Волна продолжит без него, включить снова: «Настроить» → «Хиты с YouTube».");
+    if (!ytBroken) toast(why === "stall" ? "YouTube не запускается: похоже, он замедлен или заблокирован в вашей сети. Дальше играю полные версии из других источников."
+      : "YouTube сейчас не открывается (в России он часто замедлен). Дальше играю полные версии из других источников.");
     ytBroken = true; resetPool();
-  } else toast("Это видео YouTube не даёт встроить, включаю следующее");
-  setTimeout(() => next("error"), 600);
+  } else toast("Это видео YouTube не даёт встроить, ищу другую версию");
+  if (yt.player?.stopVideo) try { yt.player.stopVideo(); } catch {}
+  // the same song from Audius, Jamendo or the uploads, if there is one; otherwise the next track
+  const run = ++resolveRun;
+  altVersion(t).then((alt) => {
+    if (run !== resolveRun || cur() !== t) return;
+    if (alt) { pl.queue[pl.i] = alt; load(true); } else next("error");
+  }).catch(() => next("error"));
+}
+// A full version of the same song that does not need YouTube (uploads → Audius → Jamendo).
+async function altVersion(t) {
+  if (!t) return null;
+  const artist = (t.artist || "").split(",")[0], na = nkey(artist), nt = nkey(t.title);
+  if (!nt) return null;
+  const keep = { title: t.title, artist: t.artist, extLink: t.extLink || t.link, extName: t.extName || "YouTube", via: t.via, reason: t.reason };
+  try {
+    const up = (await A.localTracks()).find((u) => nkey(u.title) === nt && (!na || nkey(u.artist).includes(na)));
+    if (up) return { ...up, ...keep, title: up.title, artist: up.artist };
+  } catch {}
+  let best = null, bestS = 0;
+  const consider = (list) => {
+    for (const c of list) {
+      const tt = nkey(c.title), ta = nkey(c.artist);
+      if (!tt.includes(nt) && !nt.includes(tt)) continue;
+      const orig = na && ta === na;
+      const sc = (orig ? 10 : 0) + (na && (tt.includes(na) || ta.includes(na)) ? 3 : 0) + (tt === nt ? 2 : 0)
+        + (t.duration && c.duration ? Math.max(0, 3 - Math.abs(t.duration - c.duration) / 10) : 0);
+      if (sc > bestS) { bestS = sc; best = c; }
+    }
+  };
+  try { consider(await A.auSearch(`${artist} ${t.title}`.trim(), { limit: 15 })); } catch {}
+  if (bestS < 3 && A.hasJamendo()) { try { consider(await A.jaSearch(`${artist} ${t.title}`.trim(), 10)); } catch {} }
+  if (!best || bestS < 3) return null;
+  const orig = na && nkey(best.artist) === na;
+  return { ...best, reason: orig ? t.reason : "другая версия: YouTube недоступен", extLink: keep.extLink, extName: keep.extName };
+}
+// Apple Music / Spotify result → a playable full version, cached per track.
+const resolved = new Map();
+async function resolveCatalog(t) {
+  if (resolved.has(t.id)) return resolved.get(t.id);
+  const job = (async () => {
+    let m = null;
+    if (!ytBroken) { try { m = await matchImported({ artist: t.artist, title: t.title, duration: t.duration }, await A.localTracks()); } catch {} }
+    let r = m?.t || null;
+    if (!r || (r.src === "youtube" && ytBroken)) r = await altVersion(t);
+    if (!r) return null;
+    const out = { ...r, extLink: t.link, extName: t.extName, via: t.src };
+    if (r.src === "youtube") Object.assign(out, { title: t.title, artist: t.artist, cover: t.cover || r.cover, coverSm: t.coverSm || r.coverSm, duration: t.duration || r.duration });
+    else if (m?.kind !== "orig" && r.src !== "local") out.reason = "версия трека";
+    return out;
+  })();
+  resolved.set(t.id, job);
+  const v = await job;
+  if (!v) resolved.delete(t.id);
+  return v;
 }
 const eng = {
   playing: () => (isYT() ? yt.playing : !!cur() && !audio.paused),
@@ -181,15 +236,33 @@ function playList(list, start = 0, mode = "list") {
   if (!list.length) return toast("Здесь пока нечего играть");
   pl.queue = list.map(A.refresh); pl.i = start; pl.mode = mode; load(true);
 }
+let resolveRun = 0;
 function load(autoplay) {
   const t = cur(); if (!t) return;
+  if (t.catalog) {
+    const run = ++resolveRun;
+    $("npT").innerHTML = `${esc(t.title)}<span class="q">ищу полную версию…</span>`; $("npA").textContent = t.artist; $("npC").innerHTML = cv(t.coverSm, 1);
+    resolveCatalog(t).then((r) => {
+      if (run !== resolveRun || cur() !== t) return;
+      if (r) { pl.queue[pl.i] = r; load(autoplay); return; }
+      toast(`Полной версии «${t.title}» не нашлось, включаю следующий`);
+      pl.queue.splice(pl.i, 1);
+      if (pl.i < pl.queue.length) load(autoplay); else { eng.pause(); sync(); }
+    });
+    return;
+  }
   pl.counted = false;
   R.started(t);
   if (t.src === "youtube") {
     audio.pause(); audio.removeAttribute("src");
-    $("ytbox").hidden = false; $("ytChannel").textContent = t.channel || t.artist; $("ytLink").href = t.link; $("ytSpot").href = A.spotifySearchUrl(t);
-    ytLoad().then((p) => { p.setVolume(Math.round(audio.volume * 100)); autoplay ? p.loadVideoById(t.rawId) : p.cueVideoById(t.rawId); })
-      .catch(() => { ytFail(); });
+    $("ytbox").hidden = false; $("ytChannel").textContent = t.channel || t.artist; $("ytLink").href = t.link;
+    $("ytSpot").href = t.extLink || A.spotifySearchUrl(t); $("ytSpot").textContent = t.extName || "Spotify";
+    const run = ++resolveRun;
+    ytLoad().then((p) => {
+      p.setVolume(Math.round(audio.volume * 100)); autoplay ? p.loadVideoById(t.rawId) : p.cueVideoById(t.rawId);
+      // YouTube is often throttled (Russia and other regions): if the video does not start, play another full version
+      if (autoplay) setTimeout(() => { if (run === resolveRun && cur() === t && !yt.playing && !(yt.time > 0)) ytFail(false, "stall"); }, 12000);
+    }).catch(() => { ytFail(); });
   } else {
     if (yt.player?.stopVideo) yt.player.stopVideo();
     $("ytbox").hidden = true; yt.playing = false;
@@ -204,6 +277,7 @@ function load(autoplay) {
   if (typeof fsTrack === "function") setTimeout(fsTrack, 0);
   // warm the next track on the server so skipping starts instantly
   const nx = pl.queue[pl.i + 1];
+  if (nx?.catalog) setTimeout(() => resolveCatalog(nx).catch(() => {}), 2500);
   if (nx?.src === "audius") setTimeout(() => fetch(A.refresh(nx).stream, { headers: { Range: "bytes=0-1" } }).catch(() => {}), 1500);
 }
 function next(reason = "skip") {
@@ -353,6 +427,10 @@ function renderWaveCfg() {
   document.querySelectorAll("#wcVocals button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.vocals)));
   $("wcNoveltyV").textContent = W.novelty < 35 ? "больше любимого" : W.novelty > 65 ? "больше нового" : "поровну";
   $("wcPopV").textContent = W.popularity < 35 ? "андеграунд" : W.popularity > 65 ? "хиты" : "всё подряд";
+  const val = W.valence ?? 50, en = W.energy ?? 50;
+  $("wcVal").value = val; $("wcEn").value = en;
+  $("wcValV").textContent = val <= 20 ? "грустное" : val < 43 ? "скорее грустное" : val <= 57 ? "любое" : val < 80 ? "скорее весёлое" : "весёлое";
+  $("wcEnV").textContent = en <= 20 ? "спокойное" : en < 43 ? "скорее спокойное" : en <= 57 ? "любое" : en < 80 ? "скорее бодрое" : "бодрое";
 }
 let wcTimer;
 function setWave(patch) {
@@ -362,6 +440,8 @@ function setWave(patch) {
 $("wcToggle").onclick = () => { const p = $("waveCfg"); p.hidden = !p.hidden; $("wcToggle").setAttribute("aria-expanded", String(!p.hidden)); if (!p.hidden) renderWaveCfg(); };
 $("wcNovelty").oninput = (e) => setWave({ novelty: +e.target.value });
 $("wcPop").oninput = (e) => setWave({ popularity: +e.target.value });
+$("wcVal").oninput = (e) => setWave({ valence: +e.target.value });
+$("wcEn").oninput = (e) => setWave({ energy: +e.target.value });
 $("wcDl").onchange = (e) => setWave({ onlyDl: e.target.checked });
 $("wcYt").onchange = (e) => { ytBroken = false; setWave({ yt: e.target.checked }); };
 $("wcTempo").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ tempo: b.dataset.v }); };
@@ -392,7 +472,7 @@ function rows(el, tracks, empty = "Пока пусто") {
       <span class="d">${fmt(t.duration)}</span>
       <button class="like" type="button" data-id="${esc(t.id)}" aria-label="Нравится" aria-pressed="${R.isLiked(t)}"><svg class="i"><use href="#i-heart"/></svg></button>
       <button class="addpl" type="button" aria-label="Добавить в плейлист" title="Добавить в плейлист">+</button>
-      <button class="dl" type="button" aria-label="Скачать" ${t.downloadable ? 'title="Скачать"' : 'disabled title="' + (t.src === "youtube" ? "Только прослушивание через YouTube" : "Автор не разрешил скачивание") + '"'}><svg class="i"><use href="#i-dl"/></svg></button>
+      <button class="dl" type="button" aria-label="Скачать" ${t.downloadable ? 'title="Скачать"' : 'disabled title="' + (t.src === "youtube" ? "Только прослушивание через YouTube" : t.catalog ? "Только прослушивание" : "Автор не разрешил скачивание") + '"'}><svg class="i"><use href="#i-dl"/></svg></button>
     </div>`).join("");
   sync();
 }
@@ -547,11 +627,72 @@ async function runSearch() {
   const q = $("q").value.trim();
   if (!q) { $("sr-h").textContent = "Поиск"; $("srNote").textContent = ""; rows($("results"), [], "Введите название трека, имя артиста или жанр"); return; }
   $("sr-h").textContent = `«${q}»`; loading($("results"));
-  const { list, failed } = await A.searchAll(q, { src: srcFilter, onlyDl });
-  if (failed) { $("results").innerHTML = `<div class="status err">Поиск не ответил. Проверьте интернет.</div>`; return; }
-  $("srNote").textContent = `найдено: ${list.length}`;
-  if (A.hasYouTube()) $("srNote").innerHTML = `найдено: ${list.length} · <button class="linkbtn" type="button" id="ytFind">искать на YouTube</button>`;
-  rows($("results"), list, onlyDl ? "Нет треков со скачиванием по этому запросу" : `По запросу «${q}» ничего нет. Попробуйте на английском или другой жанр.`);
+  if (srcFilter === "youtube" || srcFilter === "apple" || srcFilter === "spotify") return runSourceSearch(q, srcFilter);
+  const run = ++srcRun;
+  const ytOn = srcFilter === "all" && !onlyDl && A.hasYouTube() && W.yt !== false;
+  const words = nkey(q).split(" ").filter(Boolean);
+  const ytLocal = ytOn ? buildYtIndex().then((idx) => [...idx.values()].filter((t) => { const s = nkey(`${t.artist} ${t.title}`); return words.every((w) => s.includes(w)); }).slice(0, 12)).catch(() => []) : Promise.resolve([]);
+  const [{ list: base, failed }, hits] = await Promise.all([A.searchAll(q, { src: srcFilter, onlyDl }), ytLocal]);
+  if (run !== srcRun || $("q").value.trim() !== q) return;
+  if (failed && !hits.length) { $("results").innerHTML = `<div class="status err">Поиск не ответил. Проверьте интернет.</div>`; return; }
+  const show = (ytList) => {
+    const uploads = base.filter((t) => t.src === "local");
+    let rest = base.filter((t) => t.src !== "local");
+    if (srcFilter === "all" && ytList.length) {
+      // free catalogs only where they really match, so hits are not buried under filler
+      rest = rest.filter((t) => { const s = nkey(`${t.artist} ${t.title}`); return words.every((w) => s.includes(w)) && ((t.plays || 0) >= 300 || nkey(t.artist) === nkey(q) || nkey(t.title) === nkey(q)); }).slice(0, 15);
+    }
+    const seen = new Set();
+    const list = [...uploads, ...ytList, ...rest].filter((t) => { const k = nkey(t.artist.split(",")[0]) + "|" + nkey(t.title); if (seen.has(t.id) || (t.src !== "local" && seen.has(k))) return false; seen.add(t.id); seen.add(k); return true; });
+    rows($("results"), list, onlyDl ? "Нет треков со скачиванием по этому запросу" : `По запросу «${q}» ничего нет. Попробуйте на английском или другой жанр.`);
+    const ytN = list.filter((t) => t.src === "youtube").length;
+    $("srNote").textContent = `найдено: ${list.length}` + (ytN ? ` · YouTube Music: ${ytN}` : "");
+    return list;
+  };
+  show(hits);
+  if (ytOn && q.length >= 3) {
+    try {
+      const vids = await A.ytSearch(q);
+      if (run !== srcRun || $("q").value.trim() !== q) return;
+      const have = new Set(hits.map((t) => t.rawId));
+      show([...hits, ...vids.filter((v) => !have.has(v.videoId)).map((v) => A.fromYouTube(v))]);
+    } catch {}
+  }
+}
+let srcRun = 0;
+async function runSourceSearch(q, src) {
+  const run = ++srcRun, res = $("results");
+  const stale = () => run !== srcRun || $("q").value.trim() !== q || srcFilter !== src;
+  if (src === "spotify" && !A.hasSpotify()) {
+    res.innerHTML = `<div class="status">Поиск по Spotify ещё не подключён на сервере: нужен бесплатный ключ Spotify для разработчиков. Пока ищите через Apple Music, там почти тот же каталог.</div>`;
+    $("srNote").textContent = ""; return;
+  }
+  try {
+    if (src === "youtube") {
+      // free part first: hits from the public YouTube music charts, then the YouTube search (daily quota)
+      const words = nkey(q).split(" ").filter(Boolean);
+      const idx = await buildYtIndex();
+      const local = [...idx.values()].filter((t) => { const s = nkey(`${t.artist} ${t.title}`); return words.every((w) => s.includes(w)); }).slice(0, 20);
+      if (stale()) return;
+      if (local.length) rows(res, local);
+      $("srNote").textContent = ytBroken ? "YouTube в этой сети не открывается: при запуске найду версию из других источников" : `YouTube · только прослушивание`;
+      if (!A.hasYouTube() || q.length < 3) { if (!local.length) rows(res, [], "Ничего не нашлось"); return; }
+      const vids = await A.ytSearch(q);
+      if (stale()) return;
+      const seen = new Set(local.map((t) => t.rawId));
+      const list = [...local, ...vids.filter((v) => !seen.has(v.videoId)).map((v) => A.fromYouTube(v))];
+      rows(res, list, "На YouTube ничего не нашлось");
+      $("srNote").textContent = `YouTube: ${list.length} · только прослушивание, скачивания нет`;
+      return;
+    }
+    const list = await A.catalogSearch(src, q);
+    if (stale()) return;
+    rows(res, list, `В ${A.CATALOG_NAME[src]} по запросу «${q}» ничего нет`);
+    $("srNote").textContent = `${A.CATALOG_NAME[src]}: ${list.length} · играет полная версия с YouTube, Audius или Jamendo`;
+  } catch (err) {
+    if (stale()) return;
+    res.innerHTML = `<div class="status err">${esc(err.message || "Поиск не ответил")}</div>`;
+  }
 }
 document.addEventListener("click", async (e) => {
   if (e.target.id !== "ytFind") return;
@@ -565,10 +706,12 @@ document.addEventListener("click", async (e) => {
     $("srNote").textContent = `YouTube: ${list.length} · всего ${list.length + cur0.length}`;
   } catch (err) { toast(err.message); e.target.textContent = "искать на YouTube"; }
 });
-$("q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(runSearch, 350); });
+$("q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(runSearch, srcFilter === "youtube" || srcFilter === "all" ? 700 : 450); });
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(qTimer); runSearch(); } });
 $("fDl").onclick = (e) => { onlyDl = !onlyDl; e.currentTarget.setAttribute("aria-pressed", String(onlyDl)); runSearch(); };
 document.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => {
   if (b.dataset.src === "jamendo" && !A.hasJamendo()) return toast("Jamendo не подключён: добавьте JAMENDO_CLIENT_ID на сервере");
+  if (b.dataset.src === "youtube" && !A.hasYouTube()) return toast("YouTube не подключён на сервере");
   srcFilter = b.dataset.src; document.querySelectorAll("[data-src]").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); runSearch();
 }));
 
@@ -1024,7 +1167,7 @@ $("fsPlay").onclick = toggle; $("fsNext").onclick = () => next(); $("fsPrev").on
 $("fsLike").onclick = () => doLike(cur());
 $("fsDl").onclick = (e) => openDlMenu(cur(), e.currentTarget);
 $("fsSeek").onclick = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (eng.dur()) eng.seek(((e.clientX - r.left) / r.width) * eng.dur()); };
-$("fsFxBtn").onclick = () => { const on = $("fx").hidden; $("fx").hidden = !on; $("fsFxBtn").setAttribute("aria-pressed", String(on)); fxRender(); };
+$("fsFxBtn").onclick = () => { const on = $("fxPanel").hidden; $("fxPanel").hidden = !on; $("fsFxBtn").setAttribute("aria-pressed", String(on)); fxRender(); };
 
 // dominant colour of the cover → glow around it
 function coverColor(url) {
@@ -1058,7 +1201,8 @@ function fsTrack() {
   const src = t.src === "youtube" ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: YouTube</a> · <a href="${esc(A.spotifySearchUrl(t))}" target="_blank" rel="noopener">Найти в Spotify</a>`
     : t.src === "audius" && t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: Audius</a>`
     : t.src === "jamendo" && t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener">Источник: Jamendo</a>` : t.src === "local" ? "Ваша музыка" : "";
-  $("fsSrc").innerHTML = src + (t.reason ? ` · ${esc(t.reason)}` : "");
+  const ext = t.extLink && t.extName && t.extName !== "YouTube" ? ` · <a href="${esc(t.extLink)}" target="_blank" rel="noopener">Открыть в ${esc(t.extName)}</a>` : "";
+  $("fsSrc").innerHTML = src + ext + (t.reason ? ` · ${esc(t.reason)}` : "");
   $("fsFrom").textContent = pl.mode === "wave" ? (pl.mood ? `Моя волна · ${pl.mood}` : "Моя волна") : t.src === "youtube" ? "Источник: YouTube" : "Сейчас играет";
   $("fsCover").innerHTML = cv(t.cover && t.src === "audius" ? t.cover.replace(/\/480$/, "/1000") : t.cover, 3);
   $("fsLike").setAttribute("aria-pressed", String(R.isLiked(t)));
@@ -1210,7 +1354,11 @@ function ensureGraph() {
 function applyFx() {
   audio.playbackRate = FX.rate;
   audio.preservesPitch = audio.mozPreservesPitch = audio.webkitPreservesPitch = !FX.pitch;
-  if (yt.player?.setPlaybackRate && isYT()) yt.player.setPlaybackRate([0.5, 0.75, 1, 1.25, 1.5].reduce((a, b) => (Math.abs(b - FX.rate) < Math.abs(a - FX.rate) ? b : a)));
+  if (yt.player?.setPlaybackRate && isYT()) {
+    let rates = [0.5, 0.75, 1, 1.25, 1.5];
+    try { const r = yt.player.getAvailablePlaybackRates?.(); if (r?.length) rates = r; } catch {}
+    yt.player.setPlaybackRate(rates.reduce((a, b) => (Math.abs(b - FX.rate) < Math.abs(a - FX.rate) ? b : a)));
+  }
   const needGraph = FX.bass > 0 || FX.rev > 0 || graph.ctx;
   if (needGraph && ensureGraph()) {
     const now = graph.ctx.currentTime;

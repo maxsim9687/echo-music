@@ -40,7 +40,8 @@ jobs:
   ios:
     name: iOS (SwiftUI, unsigned IPA)
     if: github.event_name == 'push' || inputs.platform != 'windows'
-    runs-on: macos-15
+    runs-on: macos-14
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Tools
@@ -77,7 +78,7 @@ jobs:
   release:
     name: Release
     needs: [windows, ios]
-    if: needs.windows.result == 'success' && needs.ios.result == 'success'
+    if: always() && needs.windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -88,6 +89,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="apps-${{ github.run_number }}"
-          gh release create "$TAG" --repo "${{ github.repository }}" --title "Эхо — приложения #${{ github.run_number }}" \
-            --notes "Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe. iPhone: Echo.ipa не подписан, установите через Sideloadly, AltStore или TrollStore." \
-            out/windows/Echo-Windows-x64.zip out/ios/Echo.ipa
+          FILES="out/windows/Echo-Windows-x64.zip"
+          NOTES="Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe."
+          if [ -f out/ios/Echo.ipa ]; then
+            FILES="$FILES out/ios/Echo.ipa"
+            NOTES="$NOTES iPhone: Echo.ipa не подписан, установите через Sideloadly, AltStore или TrollStore."
+          else
+            NOTES="$NOTES Сборка для iPhone в этот раз не получилась, она будет в следующем релизе."
+          fi
+          gh release create "$TAG" --repo "${{ github.repository }}" --title "Эхо — приложения #${{ github.run_number }}" --notes "$NOTES" $FILES

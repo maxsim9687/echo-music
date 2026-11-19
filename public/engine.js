@@ -9,8 +9,8 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=10";
-import * as R from "./recs.js?v=10";
+import * as A from "./api.js?v=13";
+import * as R from "./recs.js?v=13";
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -163,6 +163,77 @@ async function ytCatalog(name) {
   return list;
 }
 export { ytCatalog };
+
+// ---------------------------------------------------------------- mood map
+// Every track gets an estimate on two axes, valence (sad → happy) and energy (calm → intense), from the Audius
+// mood tag, tempo, genre and words in the title. Tracks with nothing to go on get null.
+const MOOD_VE = {
+  Energizing: [0.7, 0.9], Upbeat: [0.85, 0.75], Excited: [0.85, 0.9], Fiery: [0.45, 0.95], Empowering: [0.75, 0.8], Rowdy: [0.65, 0.9],
+  Stirring: [0.6, 0.7], Peaceful: [0.6, 0.12], Easygoing: [0.7, 0.35], Tender: [0.55, 0.2], Cool: [0.55, 0.45], Sophisticated: [0.55, 0.4],
+  Serious: [0.35, 0.5], Brooding: [0.2, 0.45], Sensual: [0.55, 0.4], Romantic: [0.7, 0.35], Melancholy: [0.12, 0.25], Sentimental: [0.3, 0.25],
+  Yearning: [0.25, 0.35], Aggressive: [0.25, 0.95], Defiant: [0.35, 0.85], Gritty: [0.3, 0.8],
+};
+const GENRE_E = {
+  Ambient: 0.12, "Lo-Fi": 0.3, Classical: 0.25, Acoustic: 0.3, Jazz: 0.35, Folk: 0.3, Downtempo: 0.35, "R&B/Soul": 0.45, Soundtrack: 0.4,
+  Pop: 0.62, Alternative: 0.55, Rock: 0.72, "Hip-Hop/Rap": 0.68, Trap: 0.78, House: 0.75, "Deep House": 0.6, "Tech House": 0.8, Techno: 0.85,
+  Electronic: 0.7, "Drum & Bass": 0.92, Dubstep: 0.92, Trance: 0.85, Metal: 0.95, Hyperpop: 0.88, Synthwave: 0.6, "Future Bass": 0.75,
+  Funk: 0.7, Disco: 0.78, Latin: 0.75, Reggae: 0.5, World: 0.5, Experimental: 0.5,
+};
+const SAD_RE = /\bsad\b|sadness|cry|crying|tears|lonely|alone|heartbreak|broken|miss you|грус|слёз|слез|одинок|плачу|разлук|тоск|slowed/i;
+const HAPPY_RE = /happy|party|dance|summer|sunshine|good vibes|fun\b|celebrat|вечерин|танц|лето|счаст|радост/i;
+const CALM_RE = /chill|calm|relax|sleep|lofi|lo-fi|acoustic|piano|ambient|soft|спокой|сон|колыбел/i;
+const HYPE_RE = /hype|workout|gym|rage|hard|phonk|bass boost|energy|drift|бешен|качал/i;
+export function moodEstimate(t) {
+  const text = `${t.title} ${(t.tags || []).join(" ")}`;
+  let v = null, e = null, vn = 0, en = 0;
+  const addV = (x, w = 1) => { v = (v || 0) + x * w; vn += w; };
+  const addE = (x, w = 1) => { e = (e || 0) + x * w; en += w; };
+  const mv = MOOD_VE[t.mood];
+  if (mv) { addV(mv[0], 2); addE(mv[1], 2); }
+  if (t.bpm) addE(Math.max(0, Math.min(1, (t.bpm - 65) / 100)), 1.2);
+  if (GENRE_E[t.genre] !== undefined) addE(GENRE_E[t.genre], 0.8);
+  if (SAD_RE.test(text)) addV(0.15, 1.5);
+  if (HAPPY_RE.test(text)) addV(0.82, 1.2);
+  if (CALM_RE.test(text)) addE(0.2, 1);
+  if (HYPE_RE.test(text)) addE(0.9, 1);
+  if (t.moodVe) { addV(t.moodVe[0], 1.5); addE(t.moodVe[1], 1.5); }
+  return { v: vn ? v / vn : null, e: en ? e / en : null };
+}
+// How well a track fits the chosen preset. YouTube hits count only when they came from that preset's own search
+// or are by one of its artists; free-catalog tracks need a tag (phonk), or a genre / mood / tempo match.
+export function moodFit(t, mood) {
+  const pre = mood && R.MOOD_PRESETS[mood];
+  if (!pre) return 1;
+  if (t.moodHit === mood) return 2;
+  const text = `${t.title} ${t.artist} ${(t.tags || []).join(" ")} ${t.genre || ""}`.toLowerCase();
+  if (t.src === "youtube") return pre.ytArtists?.some((a) => (t.artist || "").toLowerCase().includes(a)) ? 2 : 0;
+  if (pre.tags) return pre.tags.some((x) => text.includes(x)) ? 2 : 0;
+  let m = 0;
+  if (pre.genres.includes(t.genre)) m++;
+  if (pre.moods.includes(t.mood)) m += 1.5;
+  if (t.bpm) m += t.bpm >= pre.bpm[0] && t.bpm <= pre.bpm[1] ? 0.5 : -1;
+  const est = moodEstimate(t);
+  if (est.v !== null && est.e !== null) m += 1 - (Math.abs(est.v - pre.ve[0]) + Math.abs(est.e - pre.ve[1]));
+  else if (est.e !== null) m += 0.5 - Math.abs(est.e - pre.ve[1]);
+  if (pre.instrumental && t.instrumental) m += 0.5;
+  return m >= 1 ? (m >= 2 ? 2 : 1) : 0;
+}
+const NOT_SONG = /\b(mix|mixtape|playlist|compilation|hour|hours|1h|2h|nonstop|full album|live stream|радио|сборник|час)\b/i;
+// A YouTube search hit is a real song only if it looks like "Artist - Title" or comes from an artist's own
+// channel ("… - Topic", VEVO). Shorts, "top 10", radios and "best songs" lists are thrown away.
+const YT_JUNK = /#|\btop\s?\d+|\bbest\b|\bsongs\b|\bradio\b|24\/7|\bmix\b|mixtape|playlist|compilation|according|\bhours?\b|nonstop|full album|\breaction\b|tutorial|сборник|подборк|лучшие|\?/i;
+export const isSongVideo = (v) => !YT_JUNK.test(v.title || "") && (/\s[-–—]\s/.test(v.title || "") || /-\s*Topic$|VEVO$/i.test(v.channel || ""));
+function moodYouTube(mood, pre) {
+  const out = [];
+  for (const q of sampleN(pre.yt || [], 2)) {
+    out.push(A.ytSearch(q).then((vs) => vs.filter(isSongVideo).map((v) => ({ ...A.fromYouTube(v), moodHit: mood, moodVe: pre.ve }))));
+  }
+  if (pre.ytArtists?.length) {
+    out.push(Promise.all(["daily", "top", "trending"].map((n) => ytCatalog(n).catch(() => []))).then((ls) => ls.flat()
+      .filter((t) => pre.ytArtists.some((a) => (t.artist || "").toLowerCase().includes(a))).map((t) => ({ ...t, moodHit: mood, moodVe: pre.ve }))));
+  }
+  return out;
+}
 export function sources(mood, cfg = {}) {
   const pre = mood && R.MOOD_PRESETS[mood];
   const jobs = [];
@@ -197,7 +268,9 @@ export function sources(mood, cfg = {}) {
     const explore = unknown.map((g) => ({ g, s: arm("gb", g) })).sort((a, b) => b.s - a.s).slice(0, 2).map((x) => x.g);
     for (const g of explore) for (const q of sampleN(GENRE_QUERIES[g], 1)) add(A.auSearch(q, { limit: 20 }), "explore");
   }
-  if (cfg.yt !== false && !cfg.onlyDl) {
+  if (pre && cfg.yt !== false && !cfg.onlyDl && A.hasYouTube()) {
+    for (const p of moodYouTube(mood, pre)) add(p, "youtube");
+  } else if (cfg.yt !== false && !cfg.onlyDl) {
     add(ytCatalog("daily"), "youtube");
     if (Math.random() < 0.7) add(ytCatalog("trending"), "youtube");
     if (Math.random() < 0.5) add(ytCatalog("top"), "youtube");
@@ -277,14 +350,26 @@ export function score(t, ctx = {}) {
   if (cfg.vocals === "instrumental") s += instr ? 3 : t.src === "youtube" ? -6 : -2.5;
   if (cfg.vocals === "vocal") s += instr ? -3 : 1;
   const pre = ctx.mood && R.MOOD_PRESETS[ctx.mood];
+  if (t.duration > 900 || (t.src !== "youtube" && NOT_SONG.test(t.title || "") && (!t.duration || t.duration > 420))) return { s: -1e9 }; // DJ sets and hour-long mixes
   if (pre) {
-    if (pre.genres.includes(t.genre)) s += pre.tags ? 1.5 : 4;
-    if (pre.moods.includes(t.mood)) s += 3;
-    if (pre.tags && pre.tags.some((x) => text.includes(x))) s += 9;
-    else if (pre.tags) s -= 5;
-    if (t.bpm) s += t.bpm >= pre.bpm[0] && t.bpm <= pre.bpm[1] ? 2.5 : -2;
-    if (t.src === "youtube" && !pre.tags) s -= 1.5; // charts rarely match a mood
-    why.push(["mood", 2.2]);
+    const fit = moodFit(t, ctx.mood);
+    if (fit === 0) return { s: -1e9 }; // does not match the chosen mood at all: never in this wave
+    s += fit === 2 ? 7 : 3;
+    if (pre.genres.includes(t.genre)) s += 1.5;
+    if (pre.moods.includes(t.mood)) s += 2;
+    if (t.bpm) s += t.bpm >= pre.bpm[0] && t.bpm <= pre.bpm[1] ? 1.5 : -2;
+    why.push(["mood", 4]);
+  }
+  // mood sliders: sad ↔ happy, calm ↔ intense (50 = any)
+  const est = (cfg.valence !== 50 || cfg.energy !== 50) ? moodEstimate(t) : null;
+  for (const [val, k] of [[cfg.valence ?? 50, "v"], [cfg.energy ?? 50, "e"]]) {
+    const strength = Math.abs(val - 50) / 50;
+    if (strength < 0.15) continue;
+    const x = est[k];
+    if (x === null) { s -= strength * (t.moodHit ? 0.5 : 2.5); continue; }
+    const d = Math.abs(x - val / 100);
+    s += strength * (3.5 - 9 * d);
+    if (d < 0.2 && strength > 0.5) why.push(["slider", 2.6]);
   }
   if (ctx.plan) {
     const pl = ctx.plan;
@@ -315,6 +400,7 @@ const REASON = {
   fresh: () => "Свежий релиз",
   new: () => "Новое для вас",
   mood: () => "Под настроение",
+  slider: () => "Под ваши ползунки настроения",
   upload: () => "Ваша музыка",
 };
 function reasonOf(t, why) {
@@ -340,12 +426,14 @@ export function pick(cands, n, ctx = {}) {
   const recent = (ctx.recent || []).filter(Boolean).slice(-8);
   const out = [], perArtist = {}, perSrc = {};
   const lambda = 1.5 + nov * 3;
-  const srcCap = Math.max(2, Math.ceil(n * (cfg.yt === false ? 0 : 0.45))); // YouTube hits: at most ~45 % of a batch
+  const srcCap = Math.max(2, Math.ceil(n * (cfg.yt === false ? 0 : 0.75))); // YouTube hits: at most ~75 % of a batch
+  const sliderStrength = Math.max(Math.abs((cfg.valence ?? 50) - 50), Math.abs((cfg.energy ?? 50) - 50)) / 50;
   const familiarWanted = Math.round(n * Math.max(0.15, 0.85 - nov));
   let familiarCount = 0;
   // mainstream share: YouTube hits have no genre/tags, so similarity alone would never pick them.
   // The popularity slider sets how many of them a batch should contain (≈15 % at "андеграунд", ≈55 % at "хиты").
-  const ytWanted = cfg.yt === false ? 0 : Math.round(n * Math.min(0.55, 0.12 + cfg.popularity / 230));
+  // with a mood only that mood's own YouTube results count; strong sliders lower the share of untagged hits
+  const ytWanted = cfg.yt === false ? 0 : Math.round(n * Math.min(0.8, 0.3 + cfg.popularity / 180) * (ctx.mood ? 0.85 : 1 - sliderStrength * 0.5));
   let ytCount = 0;
   let prev = ctx.prev;
   const used = new Set();
@@ -377,7 +465,7 @@ export function pick(cands, n, ctx = {}) {
       if (streak && genreKey(t) === streak) v -= 3;
       if (slot % 4 === 0 && isDiscovery(t)) v += 5 + nov * 4;
       if (needFamiliar && isFamiliar(t)) v += 6;
-      if (ytNeed && t.src === "youtube") v += ytNeed;
+      if (ytNeed && t.src === "youtube" && (!ctx.mood || t.moodHit === ctx.mood)) v += ytNeed;
       if (v > bestV) { bestV = v; best = x; }
     }
     if (!best) break;

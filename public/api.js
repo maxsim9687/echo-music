@@ -2,14 +2,38 @@
 const AU = "/api/au"; // proxied through our server: Audius is blocked in some networks
 let JON = false, YON = false;
 export const setYouTube = (on) => { YON = !!on; };
+let SON = false;
+export const setSpotify = (on) => { SON = !!on; };
+export const hasSpotify = () => SON;
+// Apple Music / Spotify search results: only names and covers come from there. The sound is a full version found
+// on Audius, Jamendo, the site's uploads or the official YouTube player, resolved when the track starts.
+export const CATALOG_NAME = { apple: "Apple Music", spotify: "Spotify" };
+export function fromCatalog(r, src) {
+  const cover = r.cover ? `/api/img?u=${encodeURIComponent(r.cover)}` : "";
+  return {
+    id: `${src}:${r.id}`, src, catalog: true, rawId: r.id, title: r.title, artist: r.artist,
+    artistId: "cat:" + (r.artist || "").split(",")[0].trim().toLowerCase(), cover, coverSm: cover, duration: r.duration || 0,
+    genre: r.genre || r.album || "", mood: "", tags: [], bpm: null, plays: r.popularity || 0, downloadable: false,
+    quality: CATALOG_NAME[src], stream: "", link: r.link, extLink: r.link, extName: CATALOG_NAME[src],
+  };
+}
+const storeCountry = () => {
+  const lang = (navigator.language || "en-US").split("-");
+  const cc = (lang[1] || "").toLowerCase();
+  return /^[a-z]{2}$/.test(cc) ? cc : lang[0] === "ru" ? "ru" : "us";
+};
+export async function catalogSearch(src, q) {
+  const d = await getJSON(`/api/${src}/search?q=${encodeURIComponent(q)}&cc=${storeCountry()}`, {}, 30 * 60e3);
+  return (d.data || []).map((r) => fromCatalog(r, src));
+}
 export const hasYouTube = () => YON;
 // YouTube: listening only through the official embedded player. No stream extraction, no downloads.
 export function fromYouTube(v, hint = {}) {
   return {
     id: "yt:" + v.videoId, src: "youtube", rawId: v.videoId,
-    title: hint.title || v.title, artist: hint.artist || v.channel, artistId: "yt:" + (hint.artist || v.channel || "").toLowerCase(),
+    title: hint.title || v.track || v.title, artist: hint.artist || v.artist || v.channel, artistId: "yt:" + (hint.artist || v.artist || v.channel || "").split(",")[0].trim().toLowerCase(),
     channel: v.channel, cover: `/api/yt/thumb/${v.videoId}`, coverSm: `/api/yt/thumb/${v.videoId}`, duration: 0, genre: "", mood: "", tags: [],
-    bpm: null, plays: 0, downloadable: false, quality: "YouTube", stream: "", link: `https://www.youtube.com/watch?v=${v.videoId}`,
+    bpm: null, plays: 0, downloadable: false, quality: "YouTube Music", stream: "", link: `https://www.youtube.com/watch?v=${v.videoId}`,
   };
 }
 // A YouTube hit from the public charts: full song, played only through the official embedded player.

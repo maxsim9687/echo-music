@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=10">
+<link rel="stylesheet" href="styles.css?v=13">
 <script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
 </head>
 <body>
@@ -68,6 +68,8 @@
         <div class="wcfg" id="waveCfg" hidden>
           <div class="wc-row"><label for="wcNovelty">Знакомое или новое</label><input id="wcNovelty" type="range" min="0" max="100" step="5"><small id="wcNoveltyV"></small></div>
           <div class="wc-row"><label for="wcPop">Андеграунд или хиты</label><input id="wcPop" type="range" min="0" max="100" step="5"><small id="wcPopV"></small></div>
+          <div class="wc-row"><label for="wcVal">Грустное или весёлое</label><input id="wcVal" type="range" min="0" max="100" step="5"><small id="wcValV"></small></div>
+          <div class="wc-row"><label for="wcEn">Спокойное или бодрое</label><input id="wcEn" type="range" min="0" max="100" step="5"><small id="wcEnV"></small></div>
           <div class="wc-row"><span>Темп</span><div class="seg" id="wcTempo" role="group" aria-label="Темп"><button type="button" data-v="any">Любой</button><button type="button" data-v="slow">Спокойный</button><button type="button" data-v="mid">Средний</button><button type="button" data-v="fast">Быстрый</button></div></div>
           <div class="wc-row"><span>Вокал</span><div class="seg" id="wcVocals" role="group" aria-label="Вокал"><button type="button" data-v="any">Любой</button><button type="button" data-v="instrumental">Без слов</button><button type="button" data-v="vocal">С вокалом</button></div></div>
           <div class="wc-row"><label class="tgl" for="wcYt"><input id="wcYt" type="checkbox"><span>Хиты с YouTube: полные песни через официальный плеер, только слушать</span></label></div>
@@ -171,6 +173,9 @@
         <button class="mood" data-src="all" type="button" aria-pressed="true">Все источники</button>
         <button class="mood" data-src="audius" type="button" aria-pressed="false">Audius</button>
         <button class="mood" data-src="jamendo" type="button" aria-pressed="false">Jamendo</button>
+        <button class="mood" data-src="youtube" type="button" aria-pressed="false">YouTube Music</button>
+        <button class="mood" data-src="spotify" type="button" aria-pressed="false">Spotify</button>
+        <button class="mood" data-src="apple" type="button" aria-pressed="false">Apple Music</button>
       </div>
       <section class="sec" aria-labelledby="sr-h">
         <div class="sec-h"><h2 id="sr-h">Поиск</h2><small id="srNote"></small></div>
@@ -360,7 +365,7 @@
         <button class="ib" id="fsNext" type="button" aria-label="Следующий"><svg class="i"><use href="#i-next"/></svg></button>
         <button class="ib" id="fsDl" type="button" aria-label="Скачать"><svg class="i"><use href="#i-dl"/></svg></button>
       </div>
-      <div class="fx" id="fx" hidden>
+      <div class="fx" id="fxPanel" hidden>
         <div class="fx-presets">
           <button class="mood" type="button" data-p="slowed">Slowed + reverb</button>
           <button class="mood" type="button" data-p="speed">Speed up</button>
@@ -389,6 +394,6 @@
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
-<script type="module" src="app.js?v=10"></script>
+<script type="module" src="app.js?v=13"></script>
 </body>
 </html>

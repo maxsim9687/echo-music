@@ -2,16 +2,25 @@
 // discovery slots and diversity re-ranking. Same algorithm is described in apps/SPEC.md for the native apps.
 const KEY = "echo.profile";
 
+// ve: where the preset sits on the mood map [valence 0 = sad … 1 = happy, energy 0 = calm … 1 = intense].
+// yt: YouTube searches that really return this kind of music; ytArtists: names that mark a chart hit as matching.
 export const MOOD_PRESETS = {
-  "Энергия": { genres: ["Electronic", "Drum & Bass", "House", "Trap", "Hip-Hop/Rap"], moods: ["Energizing", "Upbeat", "Excited", "Fiery", "Empowering"], bpm: [118, 180], queries: ["energy", "workout"] },
-  "Спокойствие": { genres: ["Ambient", "Lo-Fi", "Acoustic", "Jazz"], moods: ["Peaceful", "Easygoing", "Tender", "Cool"], bpm: [55, 100], queries: ["chill", "calm"] },
-  "Фокус": { genres: ["Lo-Fi", "Ambient", "Electronic", "Classical"], moods: ["Peaceful", "Cool", "Sophisticated", "Serious"], bpm: [65, 110], queries: ["lofi study", "focus"] },
-  "Ночь": { genres: ["Deep House", "Techno", "Downtempo", "R&B/Soul"], moods: ["Brooding", "Cool", "Sensual", "Melancholy"], bpm: [88, 126], queries: ["night", "late night"] },
-  "Грусть": { genres: ["Alternative", "Acoustic", "Ambient", "Lo-Fi"], moods: ["Melancholy", "Sentimental", "Yearning"], bpm: [55, 105], queries: ["sad", "melancholy"] },
-  "Phonk": { genres: ["Trap", "Hip-Hop/Rap", "Electronic"], moods: ["Aggressive", "Fiery", "Defiant", "Energizing", "Gritty"], bpm: [115, 175], queries: ["phonk", "memphis phonk", "phonk house", "dark phonk"], tags: ["phonk", "memphis", "cowbell"] },
-  "Drift Phonk": { genres: ["Trap", "Electronic", "Hip-Hop/Rap"], moods: ["Aggressive", "Energizing", "Fiery"], bpm: [110, 170], queries: ["drift phonk", "phonk drift", "brazilian phonk", "funk phonk"], tags: ["driftphonk", "drift", "phonk", "brazilianphonk"] },
+  "Энергия": { genres: ["Electronic", "Drum & Bass", "House", "Trap", "Hip-Hop/Rap", "Pop", "Rock"], moods: ["Energizing", "Upbeat", "Excited", "Fiery", "Empowering", "Rowdy"], bpm: [118, 180], queries: ["energy", "workout", "hype"], ve: [0.75, 0.9],
+    yt: ["workout motivation songs", "energetic pop songs", "hype rap songs", "gym music hits"], ytArtists: [] },
+  "Спокойствие": { genres: ["Ambient", "Lo-Fi", "Acoustic", "Jazz", "Folk", "Classical"], moods: ["Peaceful", "Easygoing", "Tender", "Cool", "Romantic"], bpm: [50, 100], queries: ["chill", "calm", "relax"], ve: [0.6, 0.18],
+    yt: ["calm acoustic songs", "chill indie songs", "relaxing soft songs", "peaceful piano song"], ytArtists: [] },
+  "Фокус": { genres: ["Lo-Fi", "Ambient", "Electronic", "Classical", "Downtempo"], moods: ["Peaceful", "Cool", "Sophisticated", "Serious"], bpm: [60, 112], queries: ["lofi study", "focus", "study beats"], ve: [0.5, 0.3], instrumental: true,
+    yt: ["lofi hip hop beat", "study music instrumental", "ambient focus music track"], ytArtists: [] },
+  "Ночь": { genres: ["Deep House", "Techno", "Downtempo", "R&B/Soul", "Synthwave"], moods: ["Brooding", "Cool", "Sensual", "Melancholy"], bpm: [80, 128], queries: ["night", "late night", "night drive"], ve: [0.4, 0.5],
+    yt: ["late night r&b songs", "night drive synthwave", "night vibe songs"], ytArtists: ["the weeknd", "lana del rey"] },
+  "Грусть": { genres: ["Alternative", "Acoustic", "Ambient", "Lo-Fi", "Pop", "Folk"], moods: ["Melancholy", "Sentimental", "Yearning", "Brooding"], bpm: [50, 108], queries: ["sad", "melancholy", "heartbreak"], ve: [0.12, 0.28],
+    yt: ["sad songs", "sad pop songs", "heartbreak songs", "грустные песни"], ytArtists: ["billie eilish", "lewis capaldi", "olivia rodrigo"] },
+  "Phonk": { genres: ["Trap", "Hip-Hop/Rap", "Electronic"], moods: ["Aggressive", "Fiery", "Defiant", "Energizing", "Gritty"], bpm: [115, 175], queries: ["phonk", "memphis phonk", "phonk house", "dark phonk"], tags: ["phonk", "memphis", "cowbell"], ve: [0.3, 0.9],
+    yt: ["phonk", "Kordhell phonk", "INTERWORLD phonk", "DVRST phonk", "dark phonk song", "memphis phonk"], ytArtists: ["kordhell", "dvrst", "interworld", "playaphonk", "kslv", "moondeity", "hensonn", "ghostface playa", "lxngvx", "sxmpra", "naeleck", "pharmacist", "dxrk"] },
+  "Drift Phonk": { genres: ["Trap", "Electronic", "Hip-Hop/Rap"], moods: ["Aggressive", "Energizing", "Fiery"], bpm: [110, 170], queries: ["drift phonk", "phonk drift", "brazilian phonk", "funk phonk"], tags: ["driftphonk", "drift", "phonk", "brazilianphonk"], ve: [0.4, 0.95],
+    yt: ["drift phonk", "brazilian phonk", "funk phonk", "MXZI phonk", "DJ FKU phonk", "phonk drift car"], ytArtists: ["mxzi", "dj fku", "sma$her", "onimxru", "kaito shoma", "dyrtywork", "hxi", "slowboy", "dj samir", "scxr soul", "ariis"] },
 };
-export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true };
+export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true, valence: 50, energy: 50 };
 const TEMPO = { slow: [0, 95], mid: [95, 125], fast: [125, 999] };
 export const STARTER_GENRES = ["Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Rock", "Pop", "Ambient", "Alternative", "Drum & Bass", "Techno", "Jazz", "R&B/Soul", "Trap", "Classical"];
 export const ALL_GENRES = [...STARTER_GENRES, "Deep House", "Tech House", "Dubstep", "Trance", "Downtempo", "Experimental", "Soundtrack", "Acoustic", "Funk", "Disco", "Synthwave", "Future Bass", "Metal", "Folk", "Latin", "Reggae", "World", "Hyperpop"];
@@ -106,7 +115,7 @@ export function learn(t, w) {
   (t.tags || []).slice(0, 4).forEach((tag) => bump("t", tag, w * 0.3));
   save();
 }
-const KEEP = ["via", "channel", "link", "views", "id", "src", "rawId", "title", "artist", "artistId", "cover", "coverSm", "duration", "genre", "mood", "tags", "bpm", "key", "releaseDate", "quality", "downloadable", "ext", "stream", "dlOrig", "dlMp3", "instrumental"];
+const KEEP = ["catalog", "extLink", "extName", "via", "channel", "link", "views", "id", "src", "rawId", "title", "artist", "artistId", "cover", "coverSm", "duration", "genre", "mood", "tags", "bpm", "key", "releaseDate", "quality", "downloadable", "ext", "stream", "dlOrig", "dlMp3", "instrumental"];
 export const slim = (t) => Object.fromEntries(KEEP.filter((k) => t[k] !== undefined && t[k] !== null && t[k] !== "").map((k) => [k, k === "tags" ? t.tags.slice(0, 6) : t[k]]));
 
 // ---------- session: the instant reaction ----------

@@ -54,6 +54,8 @@ CFG = {
     "admins": {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()},
     "jamendo": os.environ.get("JAMENDO_CLIENT_ID", ""),
     "youtube": os.environ.get("YOUTUBE_API_KEY", ""),
+    "spotify_id": os.environ.get("SPOTIFY_CLIENT_ID", ""),
+    "spotify_secret": os.environ.get("SPOTIFY_CLIENT_SECRET", ""),
     "port": int(os.environ.get("PORT", "8765") or 8765),
 }
 SECURE_COOKIE = CFG["site_url"].startswith("https://")
@@ -342,6 +344,71 @@ def cached_json(url, ttl=300):
     return value
 
 
+# ---- catalog search in Apple Music and Spotify: names and covers only, the audio always comes from elsewhere ----
+IMG_HOSTS = re.compile(r"^https://(?:is\d-ssl\.mzstatic\.com|i\.scdn\.co)/[A-Za-z0-9/_.,%=+-]{1,300}$")
+
+
+def apple_search(q, country="us"):
+    country = country if re.fullmatch(r"[a-z]{2}", country or "") else "us"
+    url = "https://itunes.apple.com/search?" + urllib.parse.urlencode(
+        {"term": q[:120], "media": "music", "entity": "song", "limit": 40, "country": country})
+    data = cached_json(url, ttl=6 * 3600)
+    out = []
+    for r in data.get("results") or []:
+        if r.get("kind") != "song" or not r.get("trackName"):
+            continue
+        art = (r.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
+        out.append({"id": str(r.get("trackId")), "title": r["trackName"], "artist": r.get("artistName", ""),
+                    "album": r.get("collectionName", ""), "duration": round((r.get("trackTimeMillis") or 0) / 1000),
+                    "cover": art, "genre": r.get("primaryGenreName", ""), "link": r.get("trackViewUrl", ""),
+                    "year": (r.get("releaseDate") or "")[:4], "explicit": r.get("trackExplicitness") == "explicit"})
+    return out
+
+
+_sp_token = {"v": "", "exp": 0}
+_sp_lock = threading.Lock()
+
+
+def spotify_token():
+    with _sp_lock:
+        if _sp_token["v"] and time.time() < _sp_token["exp"] - 60:
+            return _sp_token["v"]
+        import base64
+        auth = base64.b64encode(f"{CFG['spotify_id']}:{CFG['spotify_secret']}".encode()).decode()
+        req = urllib.request.Request("https://accounts.spotify.com/api/token", data=b"grant_type=client_credentials",
+                                     headers={**UA, "Authorization": "Basic " + auth,
+                                              "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            d = json.loads(r.read(100_000))
+        _sp_token.update(v=d["access_token"], exp=time.time() + int(d.get("expires_in", 3600)))
+        return _sp_token["v"]
+
+
+def spotify_search(q, market="US"):
+    market = market.upper() if re.fullmatch(r"[A-Za-z]{2}", market or "") else "US"
+    url = "https://api.spotify.com/v1/search?" + urllib.parse.urlencode({"q": q[:120], "type": "track", "limit": 40, "market": market})
+    with _cache_lock:
+        hit = _cache.get(url)
+        if hit and time.time() - hit[0] < 6 * 3600:
+            return hit[1]
+    req = urllib.request.Request(url, headers={**UA, "Authorization": "Bearer " + spotify_token(), "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read(4_000_000))
+    out = []
+    for t in (data.get("tracks") or {}).get("items") or []:
+        if not t or not t.get("name"):
+            continue
+        imgs = (t.get("album") or {}).get("images") or []
+        out.append({"id": t.get("id", ""), "title": t["name"], "artist": ", ".join(a.get("name", "") for a in t.get("artists") or []),
+                    "album": (t.get("album") or {}).get("name", ""), "duration": round((t.get("duration_ms") or 0) / 1000),
+                    "cover": imgs[0]["url"] if imgs else "", "genre": "", "link": (t.get("external_urls") or {}).get("spotify", ""),
+                    "year": ((t.get("album") or {}).get("release_date") or "")[:4], "explicit": bool(t.get("explicit")),
+                    "popularity": t.get("popularity", 0)})
+    with _cache_lock:
+        _cache[url] = (time.time(), out)
+    return out
+
+
 def au_url(route, params):
     """Canonical upstream URL (sorted params) so the cache hits whatever order the browser sent."""
     p = dict(params)
@@ -498,7 +565,7 @@ _socket.getaddrinfo = _ipv4_for_google
 def yt_search(q):
     """Search music videos via YouTube Data API v3. Results are cached in SQLite for 14 days because the free
     quota is ~100 searches a day."""
-    key = q.lower().strip()[:120]
+    key = "v2:" + q.lower().strip()[:120]
     now = int(time.time())
     with db() as con:
         row = con.execute("SELECT data, at FROM yt_cache WHERE q=?", (key,)).fetchone()
@@ -506,7 +573,7 @@ def yt_search(q):
         return json.loads(row["data"])
     if limited("yt:all", 90, 86400):
         raise RuntimeError("quota")
-    params = urllib.parse.urlencode({"part": "snippet", "type": "video", "videoCategoryId": "10", "maxResults": "6",
+    params = urllib.parse.urlencode({"part": "snippet", "type": "video", "videoCategoryId": "10", "maxResults": "15",
                                      "videoEmbeddable": "true", "q": q[:120], "key": CFG["youtube"]})
     with urllib.request.urlopen(urllib.request.Request(f"https://www.googleapis.com/youtube/v3/search?{params}", headers=UA), timeout=15) as r:
         data = json.loads(r.read(2_000_000))
@@ -515,7 +582,10 @@ def yt_search(q):
         vid = (it.get("id") or {}).get("videoId")
         sn = it.get("snippet") or {}
         if vid and re.fullmatch(r"[A-Za-z0-9_-]{11}", vid):
-            items.append({"videoId": vid, "title": _html.unescape(sn.get("title", "")), "channel": _html.unescape(sn.get("channelTitle", "")),
+            raw, channel = _html.unescape(sn.get("title", "")), _html.unescape(sn.get("channelTitle", ""))
+            a, t, _ = split_artist_title(raw)
+            ch = re.sub(r"\s*-\s*Topic$|VEVO$|\s+Official$", "", channel, flags=re.I).strip()
+            items.append({"videoId": vid, "title": raw, "channel": channel, "artist": a or ch, "track": t or raw,
                           "thumb": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"})
     with db() as con:
         con.execute("INSERT OR REPLACE INTO yt_cache(q,data,at) VALUES(?,?,?)", (key, json.dumps(items, ensure_ascii=False), now))
@@ -1034,6 +1104,27 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
                 print("youtube error:", type(e).__name__, e, flush=True)
                 return self.err(504, "YouTube не ответил")
+        m = re.fullmatch(r"/api/(apple|spotify)/search", path)
+        if m:
+            qs = urllib.parse.parse_qs(parsed.query)
+            q = (qs.get("q") or [""])[0].strip()
+            cc = (qs.get("cc") or ["us"])[0].strip()
+            if len(q) < 2:
+                return self.err(400, "Слишком короткий запрос")
+            if m.group(1) == "spotify" and not (CFG["spotify_id"] and CFG["spotify_secret"]):
+                return self.err(503, "Поиск по Spotify не подключён: нужен ключ Spotify на сервере")
+            if limited(m.group(1) + "-ip:" + self.ip(), 240, 3600):
+                return self.err(429, "Слишком много запросов, подождите")
+            try:
+                return self.send_json({"data": apple_search(q, cc) if m.group(1) == "apple" else spotify_search(q, cc)})
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
+                print(m.group(1), "search error:", type(e).__name__, e, flush=True)
+                return self.err(504, ("Apple Music" if m.group(1) == "apple" else "Spotify") + " не ответил")
+        if path == "/api/img":
+            u = (urllib.parse.parse_qs(parsed.query).get("u") or [""])[0]
+            if not IMG_HOSTS.fullmatch(u):
+                return self.err(400, "Недопустимый адрес картинки")
+            return self.proxy(u, cache="public, max-age=604800", kinds=("image/",))
         if path == "/api/charts":
             return self.send_json({"charts": [{"id": k, "name": v} for k, v in CHARTS.items()]})
         m = re.fullmatch(r"/api/charts/([a-z]{2,6})", path)
@@ -1050,7 +1141,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/me":
             u = self.user()
             return self.send_json({"user": {"email": u["email"], "role": self.role(u)} if u else None,
-                                   "jamendo": bool(CFG["jamendo"]), "youtube": bool(CFG["youtube"])})
+                                   "jamendo": bool(CFG["jamendo"]), "youtube": bool(CFG["youtube"]),
+                                   "spotify": bool(CFG["spotify_id"] and CFG["spotify_secret"])})
         if path == "/api/profile":
             u = self.user()
             if not u:
