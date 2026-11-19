@@ -1,8 +1,8 @@
-import * as A from "./api.js?v=13";
-import * as R from "./recs.js?v=13";
-import { createFx } from "./fx.js?v=13";
-import { downloadOptions, download } from "./download.js?v=13";
-import * as E from "./engine.js?v=13";
+import * as A from "./api.js?v=17";
+import * as R from "./recs.js?v=17";
+import { createFx } from "./fx.js?v=17";
+import { downloadOptions, download } from "./download.js?v=17";
+import * as E from "./engine.js?v=17";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -1204,6 +1204,7 @@ function fsTrack() {
   const ext = t.extLink && t.extName && t.extName !== "YouTube" ? ` · <a href="${esc(t.extLink)}" target="_blank" rel="noopener">Открыть в ${esc(t.extName)}</a>` : "";
   $("fsSrc").innerHTML = src + ext + (t.reason ? ` · ${esc(t.reason)}` : "");
   $("fsFrom").textContent = pl.mode === "wave" ? (pl.mood ? `Моя волна · ${pl.mood}` : "Моя волна") : t.src === "youtube" ? "Источник: YouTube" : "Сейчас играет";
+  $("fs").classList.toggle("video", t.src === "youtube");
   $("fsCover").innerHTML = cv(t.cover && t.src === "audius" ? t.cover.replace(/\/480$/, "/1000") : t.cover, 3);
   $("fsLike").setAttribute("aria-pressed", String(R.isLiked(t)));
   $("fsDl").disabled = !t.downloadable;
@@ -1316,7 +1317,28 @@ function lyricsTick() {
     box.scrollTo({ top: target, behavior: "smooth" });
   }
 }
+// The YouTube clip is one iframe that never moves in the DOM (moving it would restart the video). It is laid over
+// the cover of the full-screen player, or the big cover of «Моя волна», or docked small in the corner. YouTube's
+// rules require the player to stay visible (at least 200×200) while it plays, so it is never hidden.
+function ytPlace() {
+  const box = $("ytbox");
+  if (box.hidden) return;
+  let target = null;
+  if (fs.open) target = $("fsCover");
+  else if (pl.mode === "wave" && !$("v-home").hidden) {
+    const r = $("bigArt").getBoundingClientRect();
+    if (r.width >= 200 && r.height >= 200 && r.top >= 0 && r.bottom <= innerHeight - 80) target = $("bigArt");
+  }
+  box.classList.toggle("pinned", !!target);
+  box.classList.toggle("in-fs", !!target && fs.open);
+  $("wave").classList.toggle("yt", !!target && !fs.open);
+  if (target) {
+    const r = target.getBoundingClientRect();
+    Object.assign(box.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", borderRadius: getComputedStyle(target).borderRadius });
+  } else if (box.style.left) box.removeAttribute("style");
+}
 (function fsLoop() {
+  ytPlace();
   if (fs.open) {
     lyricsTick();
     const d = eng.dur() || cur()?.duration || 0, p = d ? (eng.time() / d) * 100 : 0;

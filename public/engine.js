@@ -9,8 +9,8 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=13";
-import * as R from "./recs.js?v=13";
+import * as A from "./api.js?v=17";
+import * as R from "./recs.js?v=17";
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -155,10 +155,15 @@ export function servedPenalty(t) {
 // ---------------------------------------------------------------- candidate sources
 function tagVia(list, via) { for (const t of list) t.via = t.via || via; return list; }
 const ytCache = {};
+// The public YouTube charts are full of regional film songs, "lyrical" uploads and channel compilations.
+// Keep songs in Latin or Cyrillic script that look like a single track.
+const CATALOG_JUNK = /full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
+const FOREIGN_SCRIPT = /[؀-ۿऀ-෿฀-๿က-႟]/;
 async function ytCatalog(name) {
   if (ytCache[name] && Date.now() - ytCache[name].at < 3 * 3600e3) return ytCache[name].list;
   const d = await A.api(`/api/yt/catalog?list=${name}`);
-  const list = (d.data || []).filter((v) => v.artist && v.title).map((v) => A.fromYouTubeCatalog(v, name));
+  const list = (d.data || []).filter((v) => v.artist && v.title && !CATALOG_JUNK.test(`${v.artist} ${v.title}`) && !FOREIGN_SCRIPT.test(`${v.artist} ${v.title}`))
+    .map((v) => A.fromYouTubeCatalog(v, name));
   ytCache[name] = { at: Date.now(), list };
   return list;
 }
@@ -422,7 +427,10 @@ export function pick(cands, n, ctx = {}) {
     if (r.s > -1e8) scored.push({ t, s: r.s, why: r.why });
   }
   scored.sort((a, b) => b.s - a.s);
-  const pool = scored.slice(0, 300); // MMR on the best 300 is plenty and keeps it fast
+  // MMR on the best 300 is plenty and keeps it fast; at least 120 of them are not YouTube hits, so the
+  // free catalogs and your uploads can always fill the slots that YouTube's share leaves
+  const ytTop = scored.filter((x) => x.t.src === "youtube").slice(0, 180);
+  const pool = [...ytTop, ...scored.filter((x) => x.t.src !== "youtube").slice(0, 300 - ytTop.length)].sort((a, b) => b.s - a.s);
   const recent = (ctx.recent || []).filter(Boolean).slice(-8);
   const out = [], perArtist = {}, perSrc = {};
   const lambda = 1.5 + nov * 3;
@@ -437,7 +445,12 @@ export function pick(cands, n, ctx = {}) {
   let ytCount = 0;
   let prev = ctx.prev;
   const used = new Set();
-  const isFamiliar = (t) => (R.P.a[t.artistId] || 0) > 1.5 || !!R.P.likes[t.id];
+  // "familiar" means a new track by an artist you like; your liked tracks themselves are capped separately,
+  // otherwise a big imported likes list fills the whole wave (at novelty 50 at most 2 of 10 are old likes)
+  const isLikedT = (t) => !!R.P.likes[t.id];
+  const isFamiliar = (t) => (R.P.a[t.artistId] || 0) > 1.5 && !isLikedT(t);
+  const likedCap = Math.round(n * Math.max(0, 0.4 - nov * 0.5));
+  let likedCount = 0;
   const isDiscovery = (t) => Math.abs(R.P.g[genreKey(t)] || 0) < 1 && !isFamiliar(t);
 
   while (out.length < n) {
@@ -455,6 +468,7 @@ export function pick(cands, n, ctx = {}) {
       if (spacing.some((o) => o.artistId && o.artistId === t.artistId)) continue;
       if ((perArtist[t.artistId] || 0) >= 2) continue;
       if (t.src === "youtube" && (perSrc.youtube || 0) >= srcCap) continue;
+      if (isLikedT(t) && likedCount >= likedCap) continue;
       let v = x.s;
       // flow against the track that will actually precede this one
       if (prev?.bpm && t.bpm) v -= Math.min(Math.abs(prev.bpm - t.bpm), 40) / 14;
@@ -465,7 +479,7 @@ export function pick(cands, n, ctx = {}) {
       if (streak && genreKey(t) === streak) v -= 3;
       if (slot % 4 === 0 && isDiscovery(t)) v += 5 + nov * 4;
       if (needFamiliar && isFamiliar(t)) v += 6;
-      if (ytNeed && t.src === "youtube" && (!ctx.mood || t.moodHit === ctx.mood)) v += ytNeed;
+      if (ytNeed && t.src === "youtube" && !isLikedT(t) && (!ctx.mood || t.moodHit === ctx.mood)) v += ytNeed;
       if (v > bestV) { bestV = v; best = x; }
     }
     if (!best) break;
@@ -476,6 +490,7 @@ export function pick(cands, n, ctx = {}) {
     perArtist[t.artistId] = (perArtist[t.artistId] || 0) + 1;
     perSrc[t.src] = (perSrc[t.src] || 0) + 1;
     if (isFamiliar(t)) familiarCount++;
+    if (isLikedT(t)) likedCount++;
     if (t.src === "youtube") ytCount++;
     prev = t;
   }
