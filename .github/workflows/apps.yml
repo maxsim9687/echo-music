@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths: ["apps/**", ".github/workflows/apps.yml"]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "Что собирать"
+        type: choice
+        options: [all, ios, windows]
+        default: all
 
 permissions:
   contents: write
@@ -12,6 +18,7 @@ permissions:
 jobs:
   windows:
     name: Windows (WinUI 3)
+    if: github.event_name == 'push' || inputs.platform != 'ios'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +39,7 @@ jobs:
 
   ios:
     name: iOS (SwiftUI, unsigned IPA)
+    if: github.event_name == 'push' || inputs.platform != 'windows'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +77,7 @@ jobs:
   release:
     name: Release
     needs: [windows, ios]
+    if: needs.windows.result == 'success' && needs.ios.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
