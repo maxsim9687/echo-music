@@ -1,8 +1,8 @@
-import * as A from "./api.js?v=17";
-import * as R from "./recs.js?v=17";
-import { createFx } from "./fx.js?v=17";
-import { downloadOptions, download } from "./download.js?v=17";
-import * as E from "./engine.js?v=17";
+import * as A from "./api.js?v=20";
+import * as R from "./recs.js?v=20";
+import { createFx } from "./fx.js?v=20";
+import { downloadOptions, download } from "./download.js?v=20";
+import * as E from "./engine.js?v=20";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -288,7 +288,11 @@ function next(reason = "skip") {
   else { eng.pause(); sync(); }
 }
 function prev() { if (eng.time() > 4 || pl.i <= 0) { eng.seek(0); } else { pl.i--; load(true); } }
-function toggle() { if (!cur()) return startWave(); eng.playing() ? eng.pause() : eng.play(); }
+function toggle() {
+  if (!cur()) return startWave();
+  if (eng.playing()) return eng.pause();
+  eng.play();
+}
 
 audio.addEventListener("play", sync); audio.addEventListener("pause", sync);
 audio.addEventListener("timeupdate", () => {
@@ -422,7 +426,9 @@ async function retuneWave() {
 
 // wave settings panel
 function renderWaveCfg() {
-  $("wcNovelty").value = W.novelty; $("wcPop").value = W.popularity; $("wcDl").checked = W.onlyDl; $("wcYt").checked = W.yt !== false;
+  $("wcNovelty").value = W.novelty; $("wcPop").value = W.popularity; $("wcDl").checked = W.onlyDl;
+  const srcOn = { yt: W.yt !== false, sp: W.sp !== false, ap: W.ap !== false, indie: W.indie === true };
+  document.querySelectorAll("#wcSrc [data-k]").forEach((b) => b.setAttribute("aria-pressed", String(srcOn[b.dataset.k])));
   document.querySelectorAll("#wcTempo button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.tempo)));
   document.querySelectorAll("#wcVocals button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.vocals)));
   $("wcNoveltyV").textContent = W.novelty < 35 ? "больше любимого" : W.novelty > 65 ? "больше нового" : "поровну";
@@ -431,6 +437,7 @@ function renderWaveCfg() {
   $("wcVal").value = val; $("wcEn").value = en;
   $("wcValV").textContent = val <= 20 ? "грустное" : val < 43 ? "скорее грустное" : val <= 57 ? "любое" : val < 80 ? "скорее весёлое" : "весёлое";
   $("wcEnV").textContent = en <= 20 ? "спокойное" : en < 43 ? "скорее спокойное" : en <= 57 ? "любое" : en < 80 ? "скорее бодрое" : "бодрое";
+  document.querySelectorAll("#waveCfg .rng").forEach((r) => r.style.setProperty("--p", `${r.value}%`));
 }
 let wcTimer;
 function setWave(patch) {
@@ -442,8 +449,16 @@ $("wcNovelty").oninput = (e) => setWave({ novelty: +e.target.value });
 $("wcPop").oninput = (e) => setWave({ popularity: +e.target.value });
 $("wcVal").oninput = (e) => setWave({ valence: +e.target.value });
 $("wcEn").oninput = (e) => setWave({ energy: +e.target.value });
-$("wcDl").onchange = (e) => setWave({ onlyDl: e.target.checked });
-$("wcYt").onchange = (e) => { ytBroken = false; setWave({ yt: e.target.checked }); };
+$("wcDl").onchange = (e) => setWave({ onlyDl: e.target.checked, ...(e.target.checked ? { indie: true } : {}) }); // downloads live on Audius / Jamendo
+$("wcSrc").onclick = (e) => {
+  const b = e.target.closest("[data-k]"); if (!b) return;
+  const k = b.dataset.k, on = b.getAttribute("aria-pressed") !== "true";
+  const next = { yt: W.yt !== false, sp: W.sp !== false, ap: W.ap !== false, indie: W.indie === true, [k]: on };
+  if (!Object.values(next).some(Boolean)) return toast("Оставьте хотя бы один источник");
+  if (k === "yt") ytBroken = false;
+  setWave({ [k]: on });
+};
+document.querySelectorAll("#waveCfg .rng").forEach((r) => r.addEventListener("input", () => r.style.setProperty("--p", `${r.value}%`)));
 $("wcTempo").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ tempo: b.dataset.v }); };
 $("wcVocals").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ vocals: b.dataset.v }); };
 $("wcReset").onclick = () => setWave({ ...R.WAVE_DEFAULTS });
@@ -1156,7 +1171,9 @@ function openFs() {
   fs.open = true; $("fs").hidden = false; document.body.style.overflow = "hidden";
   fsTrack(); requestAnimationFrame(sizeDust);
 }
-function closeFs() { fs.open = false; $("fs").hidden = true; document.body.style.overflow = ""; }
+function closeFs() {
+  fs.open = false; $("fs").hidden = true; document.body.style.overflow = "";
+}
 $("npFs").onclick = (e) => { e.stopPropagation(); openFs(); };
 document.querySelector(".np").addEventListener("click", openFs);
 $("vibeT").addEventListener("click", () => cur() && openFs());
@@ -1318,14 +1335,14 @@ function lyricsTick() {
   }
 }
 // The YouTube clip is one iframe that never moves in the DOM (moving it would restart the video). It is laid over
-// the cover of the full-screen player, or the big cover of «Моя волна», or docked small in the corner. YouTube's
-// rules require the player to stay visible (at least 200×200) while it plays, so it is never hidden.
+// the cover of the full-screen player, over the big cover of «Моя волна» on the home screen, or docked small in the
+// corner elsewhere. YouTube's rules require the player to stay visible (at least 200×200) while it plays.
 function ytPlace() {
   const box = $("ytbox");
   if (box.hidden) return;
   let target = null;
   if (fs.open) target = $("fsCover");
-  else if (pl.mode === "wave" && !$("v-home").hidden) {
+  else if (!$("v-home").hidden) {
     const r = $("bigArt").getBoundingClientRect();
     if (r.width >= 200 && r.height >= 200 && r.top >= 0 && r.bottom <= innerHeight - 80) target = $("bigArt");
   }

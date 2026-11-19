@@ -20,7 +20,9 @@ export const MOOD_PRESETS = {
   "Drift Phonk": { genres: ["Trap", "Electronic", "Hip-Hop/Rap"], moods: ["Aggressive", "Energizing", "Fiery"], bpm: [110, 170], queries: ["drift phonk", "phonk drift", "brazilian phonk", "funk phonk"], tags: ["driftphonk", "drift", "phonk", "brazilianphonk"], ve: [0.4, 0.95],
     yt: ["drift phonk", "brazilian phonk", "funk phonk", "MXZI phonk", "DJ FKU phonk", "phonk drift car"], ytArtists: ["mxzi", "dj fku", "sma$her", "onimxru", "kaito shoma", "dyrtywork", "hxi", "slowboy", "dj samir", "scxr soul", "ariis"] },
 };
-export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true, valence: 50, energy: 50 };
+// sources: yt = YouTube Music hits, sp / ap = Spotify / Apple Music charts (played as full versions found elsewhere),
+// indie = Audius and Jamendo (independent artists, off by default: mostly unknown names)
+export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true, sp: true, ap: true, indie: false, valence: 50, energy: 50 };
 const TEMPO = { slow: [0, 95], mid: [95, 125], fast: [125, 999] };
 export const STARTER_GENRES = ["Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Rock", "Pop", "Ambient", "Alternative", "Drum & Bass", "Techno", "Jazz", "R&B/Soul", "Trap", "Classical"];
 export const ALL_GENRES = [...STARTER_GENRES, "Deep House", "Tech House", "Dubstep", "Trance", "Downtempo", "Experimental", "Soundtrack", "Acoustic", "Funk", "Disco", "Synthwave", "Future Bass", "Metal", "Folk", "Latin", "Reggae", "World", "Hyperpop"];

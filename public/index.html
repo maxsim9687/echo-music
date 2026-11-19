@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=17">
+<link rel="stylesheet" href="styles.css?v=20">
 <script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
 </head>
 <body>
@@ -66,14 +66,23 @@
           <button class="chip-btn wc-btn" id="wcToggle" type="button" aria-expanded="false" aria-controls="waveCfg"><svg class="i"><use href="#i-gear"/></svg>Настроить</button>
         </div>
         <div class="wcfg" id="waveCfg" hidden>
-          <div class="wc-row"><label for="wcNovelty">Знакомое или новое</label><input id="wcNovelty" type="range" min="0" max="100" step="5"><small id="wcNoveltyV"></small></div>
-          <div class="wc-row"><label for="wcPop">Андеграунд или хиты</label><input id="wcPop" type="range" min="0" max="100" step="5"><small id="wcPopV"></small></div>
-          <div class="wc-row"><label for="wcVal">Грустное или весёлое</label><input id="wcVal" type="range" min="0" max="100" step="5"><small id="wcValV"></small></div>
-          <div class="wc-row"><label for="wcEn">Спокойное или бодрое</label><input id="wcEn" type="range" min="0" max="100" step="5"><small id="wcEnV"></small></div>
+          <div class="wc-sec">
+            <span class="wc-h">Откуда брать музыку</span>
+            <div class="srcs" id="wcSrc" role="group" aria-label="Источники волны">
+              <button type="button" class="src-chip" data-k="yt" aria-pressed="true"><span class="dot" aria-hidden="true"></span>YouTube Music</button>
+              <button type="button" class="src-chip" data-k="sp" aria-pressed="true"><span class="dot" aria-hidden="true"></span>Spotify</button>
+              <button type="button" class="src-chip" data-k="ap" aria-pressed="true"><span class="dot" aria-hidden="true"></span>Apple Music</button>
+              <button type="button" class="src-chip" data-k="indie" aria-pressed="false"><span class="dot" aria-hidden="true"></span>Независимые артисты</button>
+            </div>
+            <small class="wc-hint">Из Spotify и Apple Music берутся их чарты, а играет полная версия песни. «Независимые артисты»: Audius и Jamendo, малоизвестные авторы, зато многое можно скачать.</small>
+          </div>
+          <div class="wc-sl"><div class="wc-sl-h"><label for="wcNovelty">Знакомое и новое</label><em id="wcNoveltyV"></em></div><input class="rng" id="wcNovelty" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Знакомое</span><span>Новое</span></div></div>
+          <div class="wc-sl"><div class="wc-sl-h"><label for="wcPop">Популярность</label><em id="wcPopV"></em></div><input class="rng" id="wcPop" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Редкое</span><span>Хиты</span></div></div>
+          <div class="wc-sl"><div class="wc-sl-h"><label for="wcVal">Настроение</label><em id="wcValV"></em></div><input class="rng" id="wcVal" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Грустное</span><span>Весёлое</span></div></div>
+          <div class="wc-sl"><div class="wc-sl-h"><label for="wcEn">Энергия</label><em id="wcEnV"></em></div><input class="rng" id="wcEn" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Спокойное</span><span>Бодрое</span></div></div>
           <div class="wc-row"><span>Темп</span><div class="seg" id="wcTempo" role="group" aria-label="Темп"><button type="button" data-v="any">Любой</button><button type="button" data-v="slow">Спокойный</button><button type="button" data-v="mid">Средний</button><button type="button" data-v="fast">Быстрый</button></div></div>
           <div class="wc-row"><span>Вокал</span><div class="seg" id="wcVocals" role="group" aria-label="Вокал"><button type="button" data-v="any">Любой</button><button type="button" data-v="instrumental">Без слов</button><button type="button" data-v="vocal">С вокалом</button></div></div>
-          <div class="wc-row"><label class="tgl" for="wcYt"><input id="wcYt" type="checkbox"><span>Хиты с YouTube: полные песни через официальный плеер, только слушать</span></label></div>
-          <div class="wc-row"><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox"><span>Только треки, которые можно скачать</span></label><button class="linkbtn" id="wcReset" type="button">Сбросить</button></div>
+          <div class="wc-foot"><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox"><span>Только треки, которые можно скачать</span></label><button class="linkbtn" id="wcReset" type="button">Сбросить настройки</button></div>
         </div>
         <h1 id="wave-h">Моя волна</h1>
         <div class="wave-bottom">
@@ -394,6 +403,6 @@
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
-<script type="module" src="app.js?v=17"></script>
+<script type="module" src="app.js?v=20"></script>
 </body>
 </html>

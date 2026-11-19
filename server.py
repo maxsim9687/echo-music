@@ -409,6 +409,61 @@ def spotify_search(q, market="US"):
     return out
 
 
+_apple_bad = {}
+
+
+def apple_top(cc="ru"):
+    """Apple Music «most played» chart from Apple's public marketing RSS (names and covers only)."""
+    cc = cc if re.fullmatch(r"[a-z]{2}", cc or "") else "ru"
+    last = None
+    for c in dict.fromkeys([cc, "ru"]):
+        if time.time() - _apple_bad.get(c, 0) < 6 * 3600:
+            continue  # this storefront did not answer recently: do not make the listener wait for it again
+        try:
+            url = f"https://rss.marketingtools.apple.com/api/v2/{c}/music/most-played/100/songs.json"
+            with _cache_lock:
+                hit = _cache.get(url)
+            if hit and time.time() - hit[0] < 6 * 3600:
+                data = hit[1]
+            else:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, "Accept": "application/json"}), timeout=6) as r:
+                    data = json.loads(r.read(4_000_000))
+                with _cache_lock:
+                    _cache[url] = (time.time(), data)
+            out = []
+            for r in (data.get("feed") or {}).get("results") or []:
+                genres = [g.get("name", "") for g in r.get("genres") or [] if g.get("name") not in ("Музыка", "Music")]
+                out.append({"id": str(r.get("id", "")), "title": r.get("name", ""), "artist": r.get("artistName", ""),
+                            "cover": (r.get("artworkUrl100") or "").replace("100x100bb", "600x600bb"),
+                            "link": r.get("url", ""), "genre": genres[0] if genres else ""})
+            if out:
+                return {"cc": c, "data": out}
+            _apple_bad[c] = time.time()
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+            _apple_bad[c] = time.time()
+            last = e
+    raise last or ValueError("empty chart")
+
+
+_sp_covers, _sp_cov_lock = {}, threading.Lock()
+
+
+def spotify_cover_url(tid):
+    """Cover of a Spotify track via Spotify's public oEmbed (no key)."""
+    with _sp_cov_lock:
+        if tid in _sp_covers:
+            return _sp_covers[tid]
+    d = cached_json(f"https://open.spotify.com/oembed?url=https://open.spotify.com/track/{tid}", ttl=7 * 86400)
+    url = d.get("thumbnail_url") or ""
+    if not re.fullmatch(r"https://(?:image-cdn-[a-z]{2}\.spotifycdn\.com|i\.scdn\.co)/image/[0-9a-f]{20,64}", url):
+        url = ""
+    with _sp_cov_lock:
+        if len(_sp_covers) > 5000:
+            _sp_covers.clear()
+        _sp_covers[tid] = url
+    return url
+
+
 def au_url(route, params):
     """Canonical upstream URL (sorted params) so the cache hits whatever order the browser sent."""
     p = dict(params)
@@ -1120,6 +1175,22 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
                 print(m.group(1), "search error:", type(e).__name__, e, flush=True)
                 return self.err(504, ("Apple Music" if m.group(1) == "apple" else "Spotify") + " не ответил")
+        if path == "/api/apple/top":
+            cc = (urllib.parse.parse_qs(parsed.query).get("cc") or ["ru"])[0].strip()
+            try:
+                return self.send_json(apple_top(cc))
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+                print("apple top error:", type(e).__name__, e, flush=True)
+                return self.err(504, "Чарт Apple Music сейчас недоступен")
+        m = re.fullmatch(r"/api/sp/cover/([A-Za-z0-9]{22})", path)
+        if m:
+            if limited("spcov:" + self.ip(), 600, 3600):
+                return self.err(429, "Слишком много запросов")
+            try:
+                url = spotify_cover_url(m.group(1))
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                url = ""
+            return self.proxy(url, cache="public, max-age=604800", kinds=("image/",)) if url else self.err(404, "Нет обложки")
         if path == "/api/img":
             u = (urllib.parse.parse_qs(parsed.query).get("u") or [""])[0]
             if not IMG_HOSTS.fullmatch(u):

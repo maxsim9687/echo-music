@@ -9,8 +9,8 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=17";
-import * as R from "./recs.js?v=17";
+import * as A from "./api.js?v=20";
+import * as R from "./recs.js?v=20";
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -157,12 +157,13 @@ function tagVia(list, via) { for (const t of list) t.via = t.via || via; return 
 const ytCache = {};
 // The public YouTube charts are full of regional film songs, "lyrical" uploads and channel compilations.
 // Keep songs in Latin or Cyrillic script that look like a single track.
-const CATALOG_JUNK = /full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
+const CATALOG_JUNK = /full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs?\b|in cinemas|official song|official videos|\bfilm\b|movie|kapoor|khan\b|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
 const FOREIGN_SCRIPT = /[؀-ۿऀ-෿฀-๿က-႟]/;
 async function ytCatalog(name) {
   if (ytCache[name] && Date.now() - ytCache[name].at < 3 * 3600e3) return ytCache[name].list;
   const d = await A.api(`/api/yt/catalog?list=${name}`);
-  const list = (d.data || []).filter((v) => v.artist && v.title && !CATALOG_JUNK.test(`${v.artist} ${v.title}`) && !FOREIGN_SCRIPT.test(`${v.artist} ${v.title}`))
+  // film-song uploads list their credits with several "|": one of the surest signs it is not a single track
+  const list = (d.data || []).filter((v) => { const all = `${v.artist} ${v.title} ${v.full || ""}`; return v.artist && v.title && !CATALOG_JUNK.test(all) && !FOREIGN_SCRIPT.test(all) && (v.full || "").split(" | ").length < 3; })
     .map((v) => A.fromYouTubeCatalog(v, name));
   ytCache[name] = { at: Date.now(), list };
   return list;
@@ -211,7 +212,7 @@ export function moodFit(t, mood) {
   if (!pre) return 1;
   if (t.moodHit === mood) return 2;
   const text = `${t.title} ${t.artist} ${(t.tags || []).join(" ")} ${t.genre || ""}`.toLowerCase();
-  if (t.src === "youtube") return pre.ytArtists?.some((a) => (t.artist || "").toLowerCase().includes(a)) ? 2 : 0;
+  if (t.src === "youtube" || t.catalog) return pre.ytArtists?.some((a) => (t.artist || "").toLowerCase().includes(a)) ? 2 : 0;
   if (pre.tags) return pre.tags.some((x) => text.includes(x)) ? 2 : 0;
   let m = 0;
   if (pre.genres.includes(t.genre)) m++;
@@ -239,6 +240,50 @@ function moodYouTube(mood, pre) {
   }
   return out;
 }
+// ---------------------------------------------------------------- Spotify / Apple Music charts
+const nk = (s) => (s || "").toLowerCase().replace(/\(.*?\)|\[.*?\]/g, " ").replace(/feat\.?.*$|ft\..*$/i, " ").replace(/[^a-z0-9а-яё]+/gi, " ").trim();
+let hitIdx = null, hitIdxAt = 0;
+async function hitIndex() {
+  if (hitIdx && Date.now() - hitIdxAt < 3 * 3600e3) return hitIdx;
+  const m = new Map();
+  for (const n of ["daily", "trending", "top"]) {
+    try { for (const t of await ytCatalog(n)) { const k = nk(t.artist.split(",")[0]) + "|" + nk(t.title); if (!m.has(k)) m.set(k, t); } } catch {}
+  }
+  hitIdx = m; hitIdxAt = Date.now();
+  return m;
+}
+const userCountry = () => { const p = (navigator.language || "ru-RU").split("-"); return ((p[1] || (p[0] === "ru" ? "ru" : "us")) + "").toLowerCase(); };
+// a chart entry becomes the YouTube Music video of the same song when we know it, otherwise a catalog track that is
+// matched to a full version (YouTube, Audius, uploads) when it starts
+function chartTrack(it, src, idx, ytOn) {
+  const y = ytOn && idx.get(nk((it.artist || "").split(",")[0]) + "|" + nk(it.title));
+  if (y) return { ...y, via: src, extLink: it.link, extName: A.CATALOG_NAME[src], plays: Math.max(y.plays || 0, it.popularity || 0) };
+  const t = A.fromCatalog(it, src);
+  t.via = src;
+  if (src === "spotify" && it.id) t.cover = t.coverSm = `/api/sp/cover/${it.id}`;
+  return t;
+}
+async function spotifyHits(ytOn) {
+  const idx = await hitIndex();
+  const ids = ["global"];
+  try { const cs = await A.api("/api/charts"); const cc = userCountry(); if (cs.charts?.some((c) => c.id === cc)) ids.push(cc); } catch {}
+  const out = [];
+  for (const id of ids) {
+    try {
+      const d = await A.api(`/api/charts/${id}`);
+      for (const it of d.items || []) {
+        out.push(chartTrack({ id: it.spotify, title: it.title, artist: [it.artist, ...(it.with || [])].join(", "), link: `https://open.spotify.com/track/${it.spotify}`, popularity: Math.round((it.streams || 0) / 50) }, "spotify", idx, ytOn));
+      }
+    } catch {}
+  }
+  return out;
+}
+async function appleHits(ytOn) {
+  const idx = await hitIndex();
+  const d = await A.api(`/api/apple/top?cc=${userCountry()}`);
+  return (d.data || []).map((it) => chartTrack(it, "apple", idx, ytOn));
+}
+
 export function sources(mood, cfg = {}) {
   const pre = mood && R.MOOD_PRESETS[mood];
   const jobs = [];
@@ -246,12 +291,13 @@ export function sources(mood, cfg = {}) {
   const topG = R.topGenres(4), topA = R.topArtists(5), topT = R.topTags(6);
   const off = () => pickOne([0, 0, 20, 40, 60]); // random page so trending lists rotate
 
-  if (pre) {
+  const indie = cfg.indie === true;
+  if (pre && indie) {
     sampleN(pre.queries, Math.min(3, pre.queries.length)).forEach((q) => add(A.auSearch(q, { limit: 40 }), "mood"));
     pre.genres.slice(0, 3).forEach((g) => add(A.auTrending({ genre: g, limit: 30, offset: off() }), "mood"));
     for (const g of sampleN(pre.genres, 2)) for (const q of sampleN(GENRE_QUERIES[g] || [], 1)) add(A.auSearch(q, { limit: 25 }), "mood");
   }
-  if (!pre?.tags) {
+  if (!pre?.tags && indie) {
     // taste: the genres you like, each through a random trending page and a random search seed
     for (const g of topG) {
       add(A.auTrending({ genre: g, limit: 30, offset: off() }), "taste");
@@ -280,7 +326,11 @@ export function sources(mood, cfg = {}) {
     if (Math.random() < 0.7) add(ytCatalog("trending"), "youtube");
     if (Math.random() < 0.5) add(ytCatalog("top"), "youtube");
   }
-  if (A.hasJamendo()) {
+  if (!cfg.onlyDl && !pre) {
+    if (cfg.sp !== false) add(spotifyHits(cfg.yt !== false), "spotify");
+    if (cfg.ap !== false) add(appleHits(cfg.yt !== false), "apple");
+  }
+  if (A.hasJamendo() && indie) {
     const tags = (pre?.tags || (pre ? pre.genres : topG).map(A.jTag)).filter(Boolean).slice(0, 3).join("+");
     add(A.jaPopular({ tags: tags || undefined, limit: 40, offset: pickOne([0, 0, 40, 80]), order: pickOne(["popularity_week", "popularity_month", "releasedate"]), instrumental: cfg.vocals === "instrumental" }), "jamendo");
   }
@@ -434,14 +484,14 @@ export function pick(cands, n, ctx = {}) {
   const recent = (ctx.recent || []).filter(Boolean).slice(-8);
   const out = [], perArtist = {}, perSrc = {};
   const lambda = 1.5 + nov * 3;
-  const srcCap = Math.max(2, Math.ceil(n * (cfg.yt === false ? 0 : 0.75))); // YouTube hits: at most ~75 % of a batch
+  const srcCap = cfg.indie !== true ? n : Math.max(2, Math.ceil(n * (cfg.yt === false ? 0 : 0.75))); // YouTube hits: at most ~75 % of a batch
   const sliderStrength = Math.max(Math.abs((cfg.valence ?? 50) - 50), Math.abs((cfg.energy ?? 50) - 50)) / 50;
   const familiarWanted = Math.round(n * Math.max(0.15, 0.85 - nov));
   let familiarCount = 0;
   // mainstream share: YouTube hits have no genre/tags, so similarity alone would never pick them.
   // The popularity slider sets how many of them a batch should contain (≈15 % at "андеграунд", ≈55 % at "хиты").
   // with a mood only that mood's own YouTube results count; strong sliders lower the share of untagged hits
-  const ytWanted = cfg.yt === false ? 0 : Math.round(n * Math.min(0.8, 0.3 + cfg.popularity / 180) * (ctx.mood ? 0.85 : 1 - sliderStrength * 0.5));
+  const ytWanted = cfg.yt === false || cfg.indie !== true ? 0 : Math.round(n * Math.min(0.8, 0.3 + cfg.popularity / 180) * (ctx.mood ? 0.85 : 1 - sliderStrength * 0.5));
   let ytCount = 0;
   let prev = ctx.prev;
   const used = new Set();
@@ -510,5 +560,5 @@ export function explain() {
 export const SOURCE_NAMES = {
   taste: "ваши жанры", artist: "любимые артисты", tags: "ваши теги", similar: "похожее на лайки", charts: "чарты Audius",
   underground: "андеграунд", explore: "открытия", youtube: "хиты YouTube", jamendo: "Jamendo", uploads: "ваша музыка",
-  liked: "любимое", mood: "настроение", other: "другое",
+  liked: "любимое", mood: "настроение", other: "другое", spotify: "чарты Spotify", apple: "чарты Apple Music",
 };
