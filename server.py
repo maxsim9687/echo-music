@@ -1,0 +1,996 @@
+"""Эхо: сервер личного музыкального сайта.
+
+Только стандартная библиотека Python (+ необязательный пакет anthropic для ИИ-подборок).
+Запуск:  python server.py   (настройки в файле .env рядом)
+"""
+import hashlib
+import hmac
+import json
+import mimetypes
+import os
+import re
+import secrets
+import smtplib
+import sqlite3
+import ssl
+import threading
+import time
+import urllib.parse
+from email.message import EmailMessage
+from email.utils import formataddr, parseaddr
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+PUBLIC = ROOT / "public"
+DATA = ROOT / "data"
+UPLOADS = DATA / "uploads"
+DB_PATH = DATA / "echo.db"
+
+
+# ---------- config ----------
+def load_env():
+    env = {}
+    p = ROOT / ".env"
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    for k, v in env.items():
+        os.environ.setdefault(k, v)
+
+
+load_env()
+CFG = {
+    "smtp_host": os.environ.get("SMTP_HOST", ""),
+    "smtp_port": int(os.environ.get("SMTP_PORT", "465") or 465),
+    "smtp_user": os.environ.get("SMTP_USER", ""),
+    "smtp_password": os.environ.get("SMTP_PASSWORD", ""),
+    "mail_from": os.environ.get("MAIL_FROM", ""),
+    "site_url": os.environ.get("SITE_URL", "http://localhost:8765").rstrip("/"),
+    "admins": {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()},
+    "jamendo": os.environ.get("JAMENDO_CLIENT_ID", ""),
+    "port": int(os.environ.get("PORT", "8765") or 8765),
+}
+SECURE_COOKIE = CFG["site_url"].startswith("https://")
+AUDIO_EXT = {"mp3": "audio/mpeg", "wav": "audio/wav", "flac": "audio/flac", "ogg": "audio/ogg",
+             "m4a": "audio/mp4", "aac": "audio/aac", "opus": "audio/ogg"}
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+MAX_AUDIO = 500 * 1024 * 1024
+MAX_IMAGE = 8 * 1024 * 1024
+STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+                ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json"}
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$")
+
+
+# ---------- db ----------
+_db_lock = threading.Lock()  # serialises check-then-write sequences (login codes)
+
+
+class db:
+    """`with db() as con:` opens a connection, commits on success, rolls back on error, always closes."""
+
+    def __enter__(self):
+        self.con = sqlite3.connect(DB_PATH, timeout=10)
+        self.con.row_factory = sqlite3.Row
+        return self.con
+
+    def __exit__(self, exc_type, *_):
+        try:
+            if exc_type is None:
+                self.con.commit()
+            else:
+                self.con.rollback()
+        finally:
+            self.con.close()
+
+
+def init_db():
+    DATA.mkdir(exist_ok=True)
+    UPLOADS.mkdir(exist_ok=True)
+    with db() as con:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, email TEXT UNIQUE NOT NULL, name TEXT DEFAULT '',
+            created INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS codes(email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires INTEGER NOT NULL,
+            tries INTEGER NOT NULL DEFAULT 0, sent INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS profiles(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, genre TEXT DEFAULT '',
+            mood TEXT DEFAULT '', bpm REAL, ext TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
+            cover TEXT DEFAULT '', created INTEGER NOT NULL, user_id INTEGER);
+        """)
+        con.execute("PRAGMA journal_mode=WAL")
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(codes)")}
+        if "link_hash" not in cols:
+            con.execute("ALTER TABLE codes ADD COLUMN link_hash TEXT NOT NULL DEFAULT ''")
+        now = int(time.time())
+        con.execute("DELETE FROM sessions WHERE expires<?", (now,))
+        con.execute("DELETE FROM codes WHERE expires<?", (now - 86400,))
+
+
+def sha(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
+# ---------- mail ----------
+def send_code_mail(to_email: str, code: str, link: str):
+    msg = EmailMessage()
+    name, addr = parseaddr(CFG["mail_from"] or CFG["smtp_user"])
+    msg["From"] = formataddr((name or "Эхо", addr or CFG["smtp_user"]))
+    msg["To"] = to_email
+    msg["Subject"] = f"Вход в Эхо: код {code}"
+    msg.set_content(
+        f"Чтобы войти, откройте ссылку:\n{link}\n\nИли введите код на сайте: {code}\n\n"
+        "Ссылка и код действуют 10 минут и подходят один раз. Если вы не пытались войти, просто проигнорируйте письмо."
+    )
+    msg.add_alternative(f"""<!doctype html><html lang="ru"><body style="margin:0;padding:0;background:#0b0b0c">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b0b0c;padding:32px 12px">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:460px;background:#161617;border:1px solid #2a2a2c;border-radius:24px;font-family:Inter,'Segoe UI',Arial,sans-serif;color:#f4f4f4">
+<tr><td style="padding:32px 32px 8px">
+  <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+    <td style="width:22px;height:22px;border:2px solid #f4f4f4;border-radius:50%;text-align:center;vertical-align:middle"><span style="display:inline-block;width:10px;height:10px;background:#f4f4f4;border-radius:50%"></span></td>
+    <td style="padding-left:10px;font-size:22px;font-weight:700;letter-spacing:-0.5px">Эхо</td>
+  </tr></table>
+</td></tr>
+<tr><td style="padding:20px 32px 0;font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.8px">Вход в вашу музыку</td></tr>
+<tr><td style="padding:10px 32px 0;font-size:15px;line-height:1.5;color:#a1a1a6">Нажмите кнопку, и вы сразу окажетесь на сайте. Или скопируйте код и вставьте его на странице входа.</td></tr>
+<tr><td style="padding:26px 32px 0">
+  <a href="{link}" style="display:block;background:#f4f4f4;color:#0b0b0c;text-decoration:none;font-weight:700;font-size:16px;line-height:52px;height:52px;text-align:center;border-radius:999px">Войти в Эхо</a>
+</td></tr>
+<tr><td style="padding:28px 32px 0;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#8e8e93">Код для входа</td></tr>
+<tr><td style="padding:10px 32px 0">
+  <div style="background:#0b0b0c;border:1px solid #2a2a2c;border-radius:16px;padding:18px 10px;text-align:center">
+    <span style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:38px;font-weight:700;letter-spacing:12px;color:#ffffff;-webkit-user-select:all;user-select:all">{code}</span>
+  </div>
+  <div style="padding-top:8px;font-size:12px;color:#8e8e93;text-align:center">Нажмите на код дважды, чтобы выделить и скопировать</div>
+</td></tr>
+<tr><td style="padding:28px 32px 32px;font-size:13px;line-height:1.5;color:#8e8e93">Ссылка и код действуют 10 минут и подходят один раз. Если вы не пытались войти, просто проигнорируйте письмо.</td></tr>
+</table>
+<div style="padding-top:16px;font-family:Inter,Arial,sans-serif;font-size:12px;color:#5c5c60">{CFG['site_url'].replace('https://', '')}</div>
+</td></tr></table></body></html>""", subtype="html")
+    ctx = ssl.create_default_context()
+    if CFG["smtp_port"] == 465:
+        with smtplib.SMTP_SSL(CFG["smtp_host"], 465, context=ctx, timeout=20) as s:
+            s.login(CFG["smtp_user"], CFG["smtp_password"])
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(CFG["smtp_host"], CFG["smtp_port"], timeout=20) as s:
+            s.starttls(context=ctx)
+            s.login(CFG["smtp_user"], CFG["smtp_password"])
+            s.send_message(msg)
+
+
+# ---------- AI playlist plan ----------
+GENRES = ["Electronic", "Rock", "Metal", "Alternative", "Hip-Hop/Rap", "Experimental", "Punk", "Folk", "Pop", "Ambient",
+          "Soundtrack", "World", "Jazz", "Acoustic", "Funk", "R&B/Soul", "Classical", "Reggae", "Country", "Blues",
+          "Latin", "Lo-Fi", "Hyperpop", "Techno", "Trap", "House", "Tech House", "Deep House", "Disco", "Electro",
+          "Trance", "Future Bass", "Downtempo", "Drum & Bass", "Dubstep", "Vaporwave", "Synthwave"]
+MOODS = ["Peaceful", "Romantic", "Sentimental", "Tender", "Easygoing", "Yearning", "Sophisticated", "Sensual", "Cool",
+         "Gritty", "Melancholy", "Serious", "Brooding", "Fiery", "Defiant", "Aggressive", "Rowdy", "Excited",
+         "Energizing", "Empowering", "Stirring", "Upbeat"]
+
+RULES = [
+    (("учеб", "учёб", "урок", "домашк", "экзамен", "сессия", "фокус", "работ", "концентр", "study", "focus"),
+     {"title": "Под учёбу", "queries": ["lofi study", "chillhop", "ambient focus", "instrumental beats"],
+      "genres": ["Lo-Fi", "Ambient", "Downtempo"], "moods": ["Peaceful", "Cool", "Easygoing"], "bpm_min": 65, "bpm_max": 100, "instrumental": True}),
+    (("бег", "трен", "спорт", "зал", "кардио", "run", "gym", "workout"),
+     {"title": "На тренировку", "queries": ["workout", "running", "edm energy", "phonk"],
+      "genres": ["Electronic", "Drum & Bass", "Trap", "House"], "moods": ["Energizing", "Fiery", "Empowering"], "bpm_min": 120, "bpm_max": 180, "instrumental": False}),
+    (("сон", "спат", "засып", "релакс", "медит", "sleep", "relax"),
+     {"title": "Перед сном", "queries": ["sleep ambient", "calm piano", "relaxing"],
+      "genres": ["Ambient", "Classical", "Acoustic"], "moods": ["Peaceful", "Tender"], "bpm_min": 50, "bpm_max": 90, "instrumental": True}),
+    (("ноч", "дорог", "машин", "night", "drive"),
+     {"title": "Ночная дорога", "queries": ["night drive", "synthwave", "deep house night"],
+      "genres": ["Synthwave", "Deep House", "Electronic", "Downtempo"], "moods": ["Cool", "Brooding", "Sensual"], "bpm_min": 90, "bpm_max": 125, "instrumental": False}),
+    (("груст", "печал", "дожд", "sad", "rain"),
+     {"title": "Когда грустно", "queries": ["sad", "melancholy piano", "rainy day"],
+      "genres": ["Alternative", "Acoustic", "Ambient", "Lo-Fi"], "moods": ["Melancholy", "Sentimental", "Yearning"], "bpm_min": 60, "bpm_max": 105, "instrumental": False}),
+    (("вечерин", "туса", "танц", "party", "dance"),
+     {"title": "Вечеринка", "queries": ["party", "dance", "house party", "disco"],
+      "genres": ["House", "Disco", "Pop", "Tech House"], "moods": ["Upbeat", "Excited", "Rowdy"], "bpm_min": 115, "bpm_max": 135, "instrumental": False}),
+]
+
+
+def rule_plan(prompt: str) -> dict:
+    p = prompt.lower()
+    for keys, plan in RULES:
+        if any(k in p for k in keys):
+            return {**plan, "description": f"Подобрано по запросу «{prompt.strip()[:80]}».", "size": 25, "source": "rules"}
+    words = [w for w in re.findall(r"[a-zа-яё0-9]+", p) if len(w) > 2][:3]
+    return {"title": prompt.strip()[:40] or "Подборка", "description": "Подобрано по ключевым словам.",
+            "queries": words or ["chill"], "genres": [], "moods": [], "bpm_min": 0, "bpm_max": 0,
+            "instrumental": False, "size": 25, "source": "rules"}
+
+
+PLAN_SYSTEM = (
+    "Ты музыкальный куратор сервиса независимой музыки (каталоги Audius и Jamendo). "
+    "Преврати просьбу пользователя в план поиска и ответь ТОЛЬКО JSON-объектом без пояснений, с полями: "
+    '"title" (короткое название плейлиста на русском, 2-4 слова), "description" (одно предложение на русском), '
+    '"queries" (3-6 коротких поисковых запросов на английском, как теги), "genres" (0-4 жанра строго из списка), '
+    '"moods" (0-4 настроения строго из списка), "bpm_min" и "bpm_max" (целые, 0 если неважно), '
+    '"instrumental" (true, если лучше без слов), "size" (10-50). '
+    "Жанры: " + ", ".join(GENRES) + ". Настроения: " + ", ".join(MOODS) + "."
+)
+
+
+def clean_plan(plan: dict, prompt: str, source: str) -> dict:
+    base = rule_plan(prompt)
+    out = {
+        "title": str(plan.get("title") or base["title"])[:60],
+        "description": str(plan.get("description") or base["description"])[:200],
+        "queries": [str(q)[:60] for q in (plan.get("queries") or base["queries"])][:6],
+        "genres": [g for g in (plan.get("genres") or []) if g in GENRES][:4],
+        "moods": [m for m in (plan.get("moods") or []) if m in MOODS][:4],
+        "instrumental": bool(plan.get("instrumental")),
+        "source": source,
+    }
+    for k in ("bpm_min", "bpm_max", "size"):
+        try:
+            out[k] = int(plan.get(k) or 0)
+        except (TypeError, ValueError):
+            out[k] = 0
+    out["size"] = max(10, min(50, out["size"] or 25))
+    return out
+
+
+def gptunnel_plan(prompt: str) -> dict:
+    import urllib.request
+    body = json.dumps({
+        "model": os.environ.get("GPTUNNEL_MODEL") or "gpt-4o",
+        "messages": [{"role": "system", "content": PLAN_SYSTEM}, {"role": "user", "content": prompt[:500]}],
+    }).encode()
+    req = urllib.request.Request("https://gptunnel.ru/v1/chat/completions", data=body, method="POST", headers={
+        "Authorization": os.environ["GPTUNNEL_API_KEY"], "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=40) as r:
+        data = json.loads(r.read())
+    text = data["choices"][0]["message"]["content"]
+    m = re.search(r"\{[\s\S]*\}", text)
+    if not m:
+        raise ValueError("no json in answer")
+    return clean_plan(json.loads(m.group(0)), prompt, "gptunnel")
+
+
+def ai_plan(prompt: str) -> dict:
+    if os.environ.get("GPTUNNEL_API_KEY"):
+        try:
+            return gptunnel_plan(prompt)
+        except Exception as e:
+            print("gptunnel failed:", type(e).__name__, e)
+            return rule_plan(prompt)
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return rule_plan(prompt)
+    try:
+        import anthropic
+        from typing import List
+        from pydantic import BaseModel, Field
+
+        class Plan(BaseModel):
+            title: str = Field(description="Короткое название плейлиста на русском, 2-4 слова")
+            description: str = Field(description="Одно предложение на русском: что за подборка")
+            queries: List[str] = Field(description="3-6 коротких поисковых запросов на английском для каталога независимой музыки")
+            genres: List[str] = Field(description="0-4 жанра строго из списка")
+            moods: List[str] = Field(description="0-4 настроения строго из списка")
+            bpm_min: int = Field(description="Минимальный темп, 0 если неважно")
+            bpm_max: int = Field(description="Максимальный темп, 0 если неважно")
+            instrumental: bool = Field(description="True, если лучше без слов (учёба, сон, фокус)")
+            size: int = Field(description="Сколько треков, 10-50")
+
+        client = anthropic.Anthropic()
+        resp = client.messages.parse(
+            model="claude-opus-5-5",
+            max_tokens=2000,
+            output_config={"effort": "low"},
+            system=(
+                "Ты музыкальный куратор сервиса независимой музыки (каталоги Audius и Jamendo). "
+                "Преврати просьбу пользователя в план поиска. Жанры выбирай только из: " + ", ".join(GENRES) +
+                ". Настроения только из: " + ", ".join(MOODS) + ". Запросы пиши на английском, как теги."
+            ),
+            messages=[{"role": "user", "content": prompt[:500]}],
+            output_format=Plan,
+        )
+        if resp.stop_reason == "refusal" or resp.parsed_output is None:
+            return rule_plan(prompt)
+        plan = resp.parsed_output.model_dump()
+        plan["genres"] = [g for g in plan["genres"] if g in GENRES]
+        plan["moods"] = [m for m in plan["moods"] if m in MOODS]
+        plan["size"] = max(10, min(50, plan["size"]))
+        plan["source"] = "claude"
+        return plan
+    except Exception as e:  # any API/network problem: fall back to rules so the feature still works
+        print("AI plan failed:", type(e).__name__, e)
+        return rule_plan(prompt)
+
+
+# ---------- catalog proxy (Audius / Jamendo) ----------
+# Browsers in some networks cannot reach Audius (Cloudflare) or its storage nodes, so every catalog
+# request, audio stream and cover goes through this server. Only fixed upstream routes are allowed.
+import urllib.request
+import urllib.error
+
+AU_API = "https://api.audius.co/v1"
+AU_APP = "EchoMusic"
+AU_ROUTES = [re.compile(p) for p in (r"tracks/trending", r"tracks/trending/underground", r"tracks/search",
+                                     r"users/[A-Za-z0-9]{1,16}/tracks", r"tracks/[A-Za-z0-9]{1,16}")]
+AU_QUERY = {"query", "limit", "time", "genre", "only_downloadable", "offset"}
+JA_API = "https://api.jamendo.com/v3.0/tracks/"
+JA_QUERY = {"search", "limit", "order", "fuzzytags", "tags", "vocalinstrumental", "id", "offset"}
+UA = {"User-Agent": "EchoMusic/1.0 (+https://music.maxsim.space)"}
+_cache, _cache_lock = {}, threading.Lock()
+
+
+def cached_json(url, ttl=300):
+    now = time.time()
+    with _cache_lock:
+        hit = _cache.get(url)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, "Accept": "application/json"}), timeout=15) as r:
+        value = json.loads(r.read(8_000_000))
+    with _cache_lock:
+        if len(_cache) > 800:
+            _cache.clear()
+        _cache[url] = (now, value)
+    return value
+
+
+def au_url(route, params):
+    """Canonical upstream URL (sorted params) so the cache hits whatever order the browser sent."""
+    p = dict(params)
+    p["app_name"] = AU_APP
+    return f"{AU_API}/{route}?{urllib.parse.urlencode(sorted(p.items()))}"
+
+
+# The wave's first requests, kept warm so "Моя волна" starts without waiting on Audius search (1-7 s).
+WARM = [("tracks/trending", {"time": "week", "limit": "60"}), ("tracks/trending", {"time": "month", "limit": "40"}),
+        ("tracks/trending/underground", {"limit": "30"})]
+WARM += [("tracks/search", {"query": q, "limit": "40"}) for q in
+         ("phonk", "memphis phonk", "phonk house", "dark phonk", "drift phonk", "phonk drift", "brazilian phonk", "funk phonk")]
+WARM += [("tracks/search", {"query": q, "limit": "25"}) for q in
+         ("energy", "workout", "chill", "calm", "lofi study", "focus", "night", "late night", "sad", "melancholy")]
+WARM += [("tracks/trending", {"time": "week", "genre": g, "limit": "30"}) for g in
+         ("Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Trap", "Ambient", "Drum & Bass", "Techno", "Deep House", "Pop", "Rock", "Alternative")]
+
+
+def warm_loop():
+    while True:
+        for route, params in WARM:
+            try:
+                url = au_url(route, params)
+                with _cache_lock:
+                    _cache.pop(url, None)
+                cached_json(url, ttl=1800)
+            except Exception as e:
+                print("warm failed:", route, params.get("query") or params.get("genre") or "", type(e).__name__, flush=True)
+            time.sleep(0.5)
+        time.sleep(15 * 60)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+_no_redirect = urllib.request.build_opener(_NoRedirect)
+_streams, _streams_lock = {}, threading.Lock()
+
+
+def au_stream_url(tid, fresh=False):
+    """Signed content-node URL for a track, cached for 10 minutes (saves a redirect round trip per play)."""
+    now = time.time()
+    with _streams_lock:
+        hit = _streams.get(tid)
+        if hit and not fresh and now - hit[0] < 600:
+            return hit[1]
+    loc = None
+    try:
+        _no_redirect.open(urllib.request.Request(f"{AU_API}/tracks/{tid}/stream?app_name={AU_APP}", headers=UA), timeout=15).close()
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get("Location")
+    if not loc:
+        return None
+    with _streams_lock:
+        if len(_streams) > 5000:
+            _streams.clear()
+        _streams[tid] = (now, loc)
+    return loc
+
+
+AU_KEEP = ("id", "title", "duration", "genre", "mood", "tags", "bpm", "musical_key", "release_date", "play_count",
+           "is_downloadable", "is_streamable", "is_stream_gated", "permalink")
+
+
+def slim_audius(payload):
+    """Audius sends ~15 KB per track; the site needs a few fields. Cuts responses ~20x."""
+    def one(t):
+        if not isinstance(t, dict):
+            return t
+        out = {k: t.get(k) for k in AU_KEEP}
+        u = t.get("user") or {}
+        out["user"] = {"id": u.get("id"), "name": u.get("name")}
+        out["artwork"] = bool(t.get("artwork"))
+        return out
+    d = payload.get("data")
+    if isinstance(d, list):
+        return {"data": [one(t) for t in d]}
+    if isinstance(d, dict):
+        return {"data": one(d)}
+    return payload
+
+
+def safe_upstream(url):
+    p = urllib.parse.urlparse(url or "")
+    host = p.hostname or ""
+    return p.scheme == "https" and "." in host and not re.fullmatch(r"[\d.]+|\[.*\]", host) and host != "localhost"
+
+
+def ja_track(tid):
+    if not CFG["jamendo"]:
+        return None
+    q = urllib.parse.urlencode({"client_id": CFG["jamendo"], "format": "json", "id": tid, "audioformat": "mp32", "audiodlformat": "flac"})
+    res = cached_json(f"{JA_API}?{q}", ttl=1800).get("results") or []
+    return res[0] if res else None
+
+
+# ---------- Spotify daily charts (via kworb.net, a public mirror of Spotify's daily charts) ----------
+import html as _html
+
+CHARTS = {"global": "Мир", "us": "США", "gb": "Великобритания", "de": "Германия", "kz": "Казахстан", "by": "Беларусь",
+          "ua": "Украина", "br": "Бразилия"}
+_charts, _charts_lock = {}, threading.Lock()
+_ROW = re.compile(r'<tr[^>]*><td class="np">(\d+)</td>\s*<td class="np">([^<]*)</td>\s*<td class="text mp"><div>(.*?)</div></td>(.*?)</tr>', re.S)
+_A = re.compile(r'<a href="\.\./(artist|track)/([A-Za-z0-9]+)\.html">(.*?)</a>')
+
+
+def spotify_chart(cc):
+    now = time.time()
+    with _charts_lock:
+        hit = _charts.get(cc)
+        if hit and now - hit[0] < 3 * 3600:
+            return hit[1]
+    req = urllib.request.Request(f"https://kworb.net/spotify/country/{cc}_daily.html", headers={"User-Agent": "Mozilla/5.0 EchoMusic"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        page = r.read(3_000_000).decode("utf-8", "replace")
+    m = re.search(r"Spotify Daily Chart[^<]*-\s*([0-9/\-]+)", page)
+    items = []
+    for pos, change, cell, rest in _ROW.findall(page):
+        links = _A.findall(cell)
+        artists = [_html.unescape(n) for kind, _, n in links if kind == "artist"]
+        track = next(((tid, _html.unescape(n)) for kind, tid, n in links if kind == "track"), None)
+        if not track or not artists:
+            continue
+        streams = next((int(n.replace(",", "")) for n in re.findall(r"<td>([\d,]{5,})</td>", rest)), None)
+        items.append({"pos": int(pos), "change": change.strip(), "artist": artists[0], "with": artists[1:4], "title": track[1],
+                      "spotify": track[0], "streams": streams})
+        if len(items) >= 100:
+            break
+    data = {"country": cc, "name": CHARTS[cc], "date": m.group(1) if m else "", "items": items}
+    if items:
+        with _charts_lock:
+            _charts[cc] = (now, data)
+    return data
+
+
+# ---------- rate limits ----------
+_hits, _hits_lock = {}, threading.Lock()
+
+
+def limited(key, limit, window):
+    now = time.time()
+    with _hits_lock:
+        arr = [t for t in _hits.get(key, []) if now - t < window]
+        if len(arr) >= limit:
+            _hits[key] = arr
+            return True
+        arr.append(now)
+        _hits[key] = arr
+        if len(_hits) > 20000:
+            _hits.clear()
+    return False
+
+
+# ---------- HTTP ----------
+class Handler(BaseHTTPRequestHandler):
+    server_version = "Echo/1.0"
+
+    # -- helpers --
+    def log_message(self, fmt, *args):
+        print("%s %s" % (self.ip(), fmt % args), flush=True)
+
+    def ip(self):
+        xff = self.headers.get("X-Forwarded-For", "") if self.client_address[0] == "127.0.0.1" else ""
+        return (xff.split(",")[-1].strip() if xff else self.client_address[0])[:64]
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+        self.send_header("Content-Security-Policy",
+                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                         "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; "
+                         "frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
+        super().end_headers()
+
+    def proxy(self, url, cache="public, max-age=86400", download_name=None, kinds=("audio/", "image/"), quiet=False):
+        """Stream an upstream file to the client. With quiet=True a failed upstream returns False
+        without answering, so the caller can retry another way. Returns True once a response was sent."""
+        if not safe_upstream(url):
+            if quiet:
+                return False
+            self.err(502, "Источник недоступен")
+            return True
+        h = dict(UA)
+        rng = self.headers.get("Range", "")
+        if re.fullmatch(r"bytes=\d*-\d*", rng):
+            h["Range"] = rng
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=25)
+        except urllib.error.HTTPError as e:
+            if quiet and e.code != 416:
+                return False
+            self.err(416 if e.code == 416 else 502, "Источник не отдал файл")
+            return True
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if quiet:
+                return False
+            self.err(504, "Источник не ответил")
+            return True
+        with r:
+            ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip()
+            if not ctype.startswith(kinds):
+                ctype = "application/octet-stream"
+            self.send_response(r.status)
+            self.send_header("Content-Type", ctype)
+            for k in ("Content-Length", "Content-Range"):
+                if r.headers.get(k):
+                    self.send_header(k, r.headers[k])
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", cache)
+            if download_name:
+                self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + urllib.parse.quote(download_name))
+            self.end_headers()
+            if self.command == "HEAD":
+                return True
+            try:
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                pass
+        return True
+
+    def catalog(self, path, query):
+        if limited("cat:" + self.ip(), 600, 600):
+            return self.err(429, "Слишком много запросов, подождите минуту")
+        q = urllib.parse.parse_qs(query)
+        try:
+            m = re.fullmatch(r"/api/au/stream/([A-Za-z0-9]{1,16})", path)
+            if m:
+                tid = m.group(1)
+                loc = au_stream_url(tid)
+                if loc and self.proxy(loc, cache="private, max-age=3600", kinds=("audio/",), quiet=True):
+                    return None
+                loc = au_stream_url(tid, fresh=True)  # cached signature expired or node gone: resolve again
+                return self.proxy(loc or f"{AU_API}/tracks/{tid}/stream?app_name={AU_APP}", cache="private, max-age=3600", kinds=("audio/",))
+            m = re.fullmatch(r"/api/au/art/([A-Za-z0-9]{1,16})/(150|480|1000)", path)
+            if m:
+                art = (cached_json(f"{AU_API}/tracks/{m.group(1)}?app_name={AU_APP}", ttl=86400).get("data") or {}).get("artwork") or {}
+                url = art.get(f"{m.group(2)}x{m.group(2)}") or art.get("480x480") or art.get("150x150")
+                return self.proxy(url, cache="public, max-age=604800", kinds=("image/",)) if url else self.err(404, "Нет обложки")
+            m = re.fullmatch(r"/api/au/(.+)", path)
+            if m and any(r.fullmatch(m.group(1)) for r in AU_ROUTES):
+                params = {k: v[0][:200] for k, v in q.items() if k in AU_QUERY}
+                return self.send_json(slim_audius(cached_json(au_url(m.group(1), params), ttl=1200)))
+            if path == "/api/ja/tracks":
+                if not CFG["jamendo"]:
+                    return self.send_json({"results": []})
+                params = {k: v[0][:200] for k, v in q.items() if k in JA_QUERY}
+                params.update(client_id=CFG["jamendo"], format="json", include="musicinfo", audioformat="mp32", audiodlformat="flac")
+                return self.send_json(cached_json(f"{JA_API}?{urllib.parse.urlencode(params)}", ttl=600))
+            m = re.fullmatch(r"/api/ja/(stream|dl|art)/(\d{1,12})", path)
+            if m:
+                t = ja_track(m.group(2))
+                if not t:
+                    return self.err(404, "Трек не найден")
+                kind = m.group(1)
+                if kind == "art":
+                    return self.proxy(t.get("image") or t.get("album_image"), cache="public, max-age=604800", kinds=("image/",))
+                if kind == "dl":
+                    if not t.get("audiodownload_allowed"):
+                        return self.err(403, "Автор не разрешил скачивание")
+                    name = re.sub(r'[\\/:*?"<>|]+', "", f"{t.get('artist_name', '')} - {t.get('name', '')}")[:150] + ".flac"
+                    return self.proxy(t.get("audiodownload"), cache="private, max-age=3600", download_name=name)
+                return self.proxy(t.get("audio"), cache="private, max-age=3600", kinds=("audio/",))
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
+            print("catalog error:", type(e).__name__, e, flush=True)
+            return self.err(504, "Каталог не ответил")
+        return self.err(404, "Не найдено")
+
+    def send_json(self, obj, status=200, headers=None):
+        body = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
+        gz = len(body) > 1400 and "gzip" in (self.headers.get("Accept-Encoding") or "")
+        if gz:
+            import gzip
+            body = gzip.compress(body, 5)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        if gz:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def err(self, status, text):
+        self.send_json({"error": text}, status)
+
+    def body_len(self):
+        cl = (self.headers.get("Content-Length") or "0").strip()
+        return int(cl) if cl.isdigit() else -1
+
+    def read_body(self, limit):
+        n = self.body_len()
+        if n < 0:
+            raise ValueError("bad_length")
+        if n > limit:
+            raise ValueError("too_large")
+        return self.rfile.read(n) if n else b""
+
+    def read_json(self, limit=512 * 1024):
+        """Parsed JSON object, or None for anything that is not a JSON object. Size errors propagate."""
+        raw = self.read_body(limit)
+        try:
+            v = json.loads(raw or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return v if isinstance(v, dict) else None
+
+    def user(self):
+        c = self.headers.get("Cookie", "")
+        m = re.search(r"(?:^|;\s*)sid=([A-Za-z0-9_\-]+)", c)
+        if not m:
+            return None
+        with db() as con:
+            row = con.execute("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires>?",
+                              (sha(m.group(1)), int(time.time()))).fetchone()
+        return dict(row) if row else None
+
+    def role(self, u):
+        return "admin" if u and u["email"].lower() in CFG["admins"] else "user"
+
+    def csrf_ok(self):
+        return self.headers.get("X-Echo") == "1"
+
+    # -- routing --
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path.startswith(("/api/au/", "/api/ja/")):
+            return self.catalog(path, parsed.query)
+        if path == "/api/charts":
+            return self.send_json({"charts": [{"id": k, "name": v} for k, v in CHARTS.items()]})
+        m = re.fullmatch(r"/api/charts/([a-z]{2,6})", path)
+        if m:
+            if m.group(1) not in CHARTS:
+                return self.err(404, "Нет такого чарта")
+            if limited("chart:" + self.ip(), 120, 3600):
+                return self.err(429, "Слишком много запросов")
+            try:
+                return self.send_json(spotify_chart(m.group(1)))
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                print("chart error:", type(e).__name__, e, flush=True)
+                return self.err(504, "Чарт сейчас недоступен. Попробуйте позже.")
+        if path == "/api/me":
+            u = self.user()
+            return self.send_json({"user": {"email": u["email"], "role": self.role(u)} if u else None,
+                                   "jamendo": bool(CFG["jamendo"])})
+        if path == "/api/profile":
+            u = self.user()
+            if not u:
+                return self.err(401, "Войдите, чтобы синхронизировать вкус")
+            with db() as con:
+                row = con.execute("SELECT data FROM profiles WHERE user_id=?", (u["id"],)).fetchone()
+            return self.send_json({"data": json.loads(row["data"]) if row else None})
+        if path == "/api/uploads":
+            q = (urllib.parse.parse_qs(parsed.query).get("q") or [""])[0].strip().lower()[:100]
+            with db() as con:
+                rows = [dict(r) for r in con.execute("SELECT * FROM uploads ORDER BY created DESC").fetchall()]
+            if q:
+                words = q.split()
+                rows = [r for r in rows if all(w in f"{r['title']} {r['artist']} {r['genre']} {r['mood']}".lower() for w in words)]
+            return self.send_json({"data": rows})
+        m = re.fullmatch(r"/media/([a-f0-9]{16})(/cover)?", path)
+        if m:
+            return self.serve_media(m.group(1), bool(m.group(2)))
+        return self.serve_static(path)
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if not self.csrf_ok():
+            return self.err(403, "Запрос отклонён")
+        try:
+            if path == "/api/auth/code":
+                return self.auth_code()
+            if path == "/api/auth/verify":
+                return self.auth_verify()
+            if path == "/api/auth/logout":
+                return self.logout()
+            if path == "/api/ai/playlist":
+                u = self.user()
+                if not u:
+                    return self.err(401, "Войдите по почте, чтобы ИИшка собирала плейлисты")
+                body = self.read_json() or {}
+                prompt = str(body.get("prompt", "")).strip()[:500]
+                if not prompt:
+                    return self.err(400, "Опишите, какой нужен плейлист")
+                if limited(f"ai:{u['id']}", 40, 86400) or limited("ai:all", 400, 86400):
+                    return self.send_json({"plan": rule_plan(prompt), "limited": True})
+                return self.send_json({"plan": ai_plan(prompt)})
+            if path == "/api/uploads":
+                return self.upload_audio()
+            m = re.fullmatch(r"/api/uploads/([a-f0-9]{16})/cover", path)
+            if m:
+                return self.upload_cover(m.group(1))
+        except ValueError as e:
+            if str(e) == "too_large":
+                return self.err(413, "Файл слишком большой")
+            if str(e) == "bad_length":
+                return self.err(411, "Неверная длина запроса")
+            raise
+        return self.err(404, "Не найдено")
+
+    def do_PUT(self):
+        path = urllib.parse.urlparse(self.path).path
+        if not self.csrf_ok():
+            return self.err(403, "Запрос отклонён")
+        if path == "/api/profile":
+            u = self.user()
+            if not u:
+                return self.err(401, "Войдите, чтобы синхронизировать вкус")
+            try:
+                body = self.read_json(1024 * 1024)
+            except ValueError:
+                return self.err(413, "Профиль слишком большой")
+            if body is None:
+                return self.err(400, "Неверные данные")
+            with db() as con:
+                con.execute("INSERT INTO profiles(user_id,data,updated) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data, updated=excluded.updated",
+                            (u["id"], json.dumps(body.get("data"), ensure_ascii=False), int(time.time())))
+            return self.send_json({"ok": True})
+        return self.err(404, "Не найдено")
+
+    def do_DELETE(self):
+        path = urllib.parse.urlparse(self.path).path
+        if not self.csrf_ok():
+            return self.err(403, "Запрос отклонён")
+        m = re.fullmatch(r"/api/uploads/([a-f0-9]{16})", path)
+        if m:
+            if self.role(self.user()) != "admin":
+                return self.err(403, "Только для администратора")
+            with db() as con:
+                row = con.execute("SELECT * FROM uploads WHERE id=?", (m.group(1),)).fetchone()
+                if not row:
+                    return self.err(404, "Трек не найден")
+                con.execute("DELETE FROM uploads WHERE id=?", (row["id"],))
+            for f in UPLOADS.glob(row["id"] + ".*"):
+                f.unlink(missing_ok=True)
+            return self.send_json({"ok": True})
+        return self.err(404, "Не найдено")
+
+    # -- auth: one-time code + magic link by email --
+    def auth_code(self):
+        body = self.read_json() or {}
+        email = str(body.get("email", "")).strip().lower()
+        if not EMAIL_RE.match(email):
+            return self.err(400, "Проверьте адрес почты")
+        if limited("mail-ip:" + self.ip(), 6, 3600) or limited("mail-all", 300, 86400):
+            return self.err(429, "Слишком много писем. Попробуйте через час.")
+        now = int(time.time())
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        link_token = secrets.token_urlsafe(32)
+        with _db_lock, db() as con:
+            row = con.execute("SELECT sent FROM codes WHERE email=?", (email,)).fetchone()
+            if row and now - row["sent"] < 45:
+                return self.err(429, f"Письмо уже отправлено. Повторить можно через {45 - (now - row['sent'])} с")
+            con.execute("INSERT INTO codes(email,code_hash,link_hash,expires,tries,sent) VALUES(?,?,?,?,0,?) "
+                        "ON CONFLICT(email) DO UPDATE SET code_hash=excluded.code_hash, link_hash=excluded.link_hash, "
+                        "expires=excluded.expires, tries=0, sent=excluded.sent",
+                        (email, sha(email + ":" + code), sha("link:" + link_token), now + 600, now))
+        link = f"{CFG['site_url']}/#ml-{email.encode().hex()}-{link_token}"
+        try:
+            send_code_mail(email, code, link)
+        except Exception as e:
+            print("SMTP error:", type(e).__name__, e, flush=True)
+            return self.err(502, "Не удалось отправить письмо. Попробуйте позже.")
+        return self.send_json({"ok": True})
+
+    def auth_verify(self):
+        body = self.read_json() or {}
+        email = str(body.get("email", "")).strip().lower()
+        code = re.sub(r"\D", "", str(body.get("code", "")))[:6]
+        link = str(body.get("link", ""))[:100]
+        if not EMAIL_RE.match(email) or not (code or link):
+            return self.err(400, "Неверный код")
+        if limited("fail:" + email, 25, 86400) or limited("verify-ip:" + self.ip(), 60, 3600):
+            return self.err(429, "Слишком много попыток. Попробуйте завтра.")
+        now = int(time.time())
+        with _db_lock, db() as con:
+            # reserve one attempt atomically before comparing, so parallel guesses cannot exceed the limit
+            row = con.execute("UPDATE codes SET tries=tries+1 WHERE email=? AND tries<5 AND expires>? "
+                              "RETURNING code_hash, link_hash", (email, now)).fetchone()
+            if not row:
+                return self.err(400, "Код истёк или попыток больше нет. Запросите новое письмо.")
+            ok = bool(link and row["link_hash"] and hmac.compare_digest(row["link_hash"], sha("link:" + link))) or \
+                bool(code and hmac.compare_digest(row["code_hash"], sha(email + ":" + code)))
+            if not ok:
+                return self.err(400, "Ссылка устарела. Запросите новое письмо." if link else "Неверный код")
+            con.execute("DELETE FROM codes WHERE email=?", (email,))
+            u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+            if not u:
+                con.execute("INSERT INTO users(email,created) VALUES(?,?)", (email, now))
+                u = con.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+            token = secrets.token_urlsafe(32)
+            con.execute("INSERT INTO sessions(token_hash,user_id,expires) VALUES(?,?,?)", (sha(token), u["id"], now + 60 * 86400))
+        cookie = f"sid={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={60 * 86400}" + ("; Secure" if SECURE_COOKIE else "")
+        return self.send_json({"user": {"email": email, "role": self.role(dict(u))}}, headers={"Set-Cookie": cookie})
+
+    def logout(self):
+        c = self.headers.get("Cookie", "")
+        m = re.search(r"(?:^|;\s*)sid=([A-Za-z0-9_\-]+)", c)
+        if m:
+            with db() as con:
+                con.execute("DELETE FROM sessions WHERE token_hash=?", (sha(m.group(1)),))
+        return self.send_json({"ok": True}, headers={"Set-Cookie": "sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"})
+
+    # -- uploads (admin) --
+    def upload_audio(self):
+        u = self.user()
+        if self.role(u) != "admin":
+            return self.err(403, "Загружать музыку может только администратор")
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        g = lambda k: (q.get(k) or [""])[0].strip()[:200]
+        title, artist, filename = g("title"), g("artist"), g("filename")
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in AUDIO_EXT:
+            return self.err(400, "Поддерживаются MP3, WAV, FLAC, OGG, M4A")
+        if not title or not artist:
+            return self.err(400, "Укажите название и исполнителя")
+        n = self.body_len()
+        if n <= 0:
+            return self.err(400, "Пустой файл")
+        if n > MAX_AUDIO:
+            return self.err(413, "Файл больше 500 МБ")
+        uid = secrets.token_hex(8)
+        dest = UPLOADS / f"{uid}.{ext}"
+        left = n
+        with open(dest, "wb") as f:
+            while left > 0:
+                chunk = self.rfile.read(min(1 << 20, left))
+                if not chunk:
+                    break
+                f.write(chunk)
+                left -= len(chunk)
+        if left:
+            dest.unlink(missing_ok=True)
+            return self.err(400, "Загрузка прервалась")
+        try:
+            bpm = float(g("bpm")) if g("bpm") else None
+            dur = float(g("duration")) if g("duration") else None
+        except ValueError:
+            bpm = dur = None
+        with db() as con:
+            con.execute("INSERT INTO uploads(id,title,artist,genre,mood,bpm,ext,size,duration,created,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        (uid, title, artist, g("genre"), g("mood"), bpm, ext, n, dur, int(time.time()), u["id"]))
+        return self.send_json({"id": uid})
+
+    def upload_cover(self, uid):
+        if self.role(self.user()) != "admin":
+            return self.err(403, "Только для администратора")
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip()
+        ext = IMAGE_TYPES.get(ctype)
+        if not ext:
+            return self.err(400, "Обложка должна быть JPG, PNG или WEBP")
+        data = self.read_body(MAX_IMAGE)
+        with db() as con:
+            if not con.execute("SELECT 1 FROM uploads WHERE id=?", (uid,)).fetchone():
+                return self.err(404, "Трек не найден")
+            (UPLOADS / f"{uid}.cover.{ext}").write_bytes(data)
+            con.execute("UPDATE uploads SET cover=? WHERE id=?", (ext, uid))
+        return self.send_json({"ok": True})
+
+    # -- files --
+    def serve_media(self, uid, cover):
+        with db() as con:
+            row = con.execute("SELECT * FROM uploads WHERE id=?", (uid,)).fetchone()
+        if not row:
+            return self.err(404, "Не найдено")
+        if cover:
+            if not row["cover"]:
+                return self.err(404, "Нет обложки")
+            return self.send_file(UPLOADS / f"{uid}.cover.{row['cover']}", f"image/{'jpeg' if row['cover'] == 'jpg' else row['cover']}")
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        dl = None
+        if q.get("download"):
+            safe = re.sub(r'[\\/:*?"<>|]+', "", f"{row['artist']} - {row['title']}")[:150]
+            dl = f"{safe}.{row['ext']}"
+        return self.send_file(UPLOADS / f"{uid}.{row['ext']}", AUDIO_EXT[row["ext"]], download_name=dl)
+
+    def serve_static(self, path):
+        rel = urllib.parse.unquote(path).lstrip("/") or "index.html"
+        try:
+            target = (PUBLIC / rel).resolve()
+            inside = PUBLIC.resolve() in target.parents
+        except (ValueError, OSError):
+            return self.err(404, "Не найдено")
+        if not inside or not target.is_file():
+            target = PUBLIC / "index.html"
+        ctype = STATIC_TYPES.get(target.suffix.lower()) or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        return self.send_file(target, ctype, cache="no-cache")
+
+    def send_file(self, p: Path, ctype, download_name=None, cache="public, max-age=86400"):
+        if not p.is_file():
+            return self.err(404, "Файл не найден")
+        size = p.stat().st_size
+        start, end = 0, size - 1
+        rng = self.headers.get("Range")
+        status = 200
+        if rng:
+            m = re.match(r"bytes=(\d*)-(\d*)", rng)
+            if m:
+                if m.group(1):
+                    start = int(m.group(1))
+                    if m.group(2):
+                        end = min(int(m.group(2)), size - 1)
+                elif m.group(2):
+                    start = max(0, size - int(m.group(2)))
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                status = 206
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", cache)
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if download_name:
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + urllib.parse.quote(download_name))
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(p, "rb") as f:
+            f.seek(start)
+            left = end - start + 1
+            try:
+                while left > 0:
+                    chunk = f.read(min(1 << 16, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    do_HEAD = do_GET
+
+
+if __name__ == "__main__":
+    init_db()
+    threading.Thread(target=warm_loop, daemon=True).start()
+    srv = ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), CFG["port"]), Handler)
+    print(f"Эхо запущено: http://localhost:{CFG['port']}  (админы: {len(CFG['admins'])}, почта: {'да' if CFG['smtp_host'] else 'нет'})")
+    srv.serve_forever()

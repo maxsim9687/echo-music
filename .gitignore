@@ -1,0 +1,12 @@
+.env
+.venv/
+data/
+__pycache__/
+out/
+dist/
+apps/ios/build/
+apps/ios/*.xcodeproj/
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/windows/.vs/
+*.user

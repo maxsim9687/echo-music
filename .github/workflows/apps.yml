@@ -1,0 +1,84 @@
+name: Apps
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/**", ".github/workflows/apps.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows (WinUI 3)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish
+        shell: pwsh
+        run: |
+          dotnet publish apps/windows/Echo/Echo.csproj -c Release -r win-x64 -p:Platform=x64 -o out/Echo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path out/Echo/* -DestinationPath dist/Echo-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/Echo-Windows-x64.zip
+
+  ios:
+    name: iOS (SwiftUI, unsigned IPA)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install xcodegen
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Generate project
+        working-directory: apps/ios
+        run: xcodegen generate
+      - name: Build
+        working-directory: apps/ios
+        run: |
+          set -o pipefail
+          xcodebuild -project Echo.xcodeproj -scheme Echo -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build \
+            | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/Build/Products/Release-iphoneos/Echo.app
+      - name: Show errors
+        if: failure()
+        working-directory: apps/ios
+        run: grep -E "error:" build.log | head -80 || true
+      - name: Package IPA
+        working-directory: apps/ios
+        run: |
+          mkdir -p Payload ../../dist
+          cp -R build/Build/Products/Release-iphoneos/Echo.app Payload/
+          zip -qry ../../dist/Echo.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/Echo.ipa
+
+  release:
+    name: Release
+    needs: [windows, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="apps-${{ github.run_number }}"
+          gh release create "$TAG" --repo "${{ github.repository }}" --title "Эхо — приложения #${{ github.run_number }}" \
+            --notes "Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe. iPhone: Echo.ipa не подписан, установите через Sideloadly, AltStore или TrollStore." \
+            out/windows/Echo-Windows-x64.zip out/ios/Echo.ipa

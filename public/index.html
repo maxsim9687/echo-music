@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ru" data-v="10">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Эхо</title>
+<meta name="description" content="Личный музыкальный плеер: моя волна, поиск и скачивание MP3/WAV">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
+<link rel="stylesheet" href="styles.css?v=6">
+<script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 20 9 12l10-8v16zM5 19V5"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="m5 4 10 8-10 8V4zM19 5v14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-9-9a4.8 4.8 0 0 1 9-3 4.8 4.8 0 0 1 9 3c-2 4.6-9 9-9 9z"/></symbol>
+  <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9h-6v-6H9v6H3z"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><path d="M2 12h2l2-6 3 12 3-15 3 15 3-9 2 3h2"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><path d="M4 4v16M9 4v16M14 5l5 15"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 6h4l10 12h4M3 18h4l3-3.6M14 9.6 17 6h4M18 3l3 3-3 3M18 15l3 3-3 3"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/></symbol>
+</svg>
+
+<canvas id="fx" aria-hidden="true"></canvas>
+
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><span class="logo-mark" aria-hidden="true"></span>Эхо</div>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#home" data-view="home"><svg class="i"><use href="#i-wave"/></svg><span>Моя волна</span></a>
+      <a href="#search" data-view="search"><svg class="i"><use href="#i-search"/></svg><span>Поиск</span></a>
+      <a href="#charts" data-view="charts"><svg class="i"><use href="#i-chart"/></svg><span>Чарты</span></a>
+      <a href="#library" data-view="library"><svg class="i"><use href="#i-lib"/></svg><span>Коллекция</span></a>
+      <a href="#upload" data-view="upload" id="navUpload" hidden><svg class="i"><use href="#i-up"/></svg><span>Загрузка</span></a>
+      <a href="#prefs" data-view="prefs"><svg class="i"><use href="#i-gear"/></svg><span>Настройки</span></a>
+    </nav>
+    <div class="acct" id="acct">
+      <a href="#login" class="btn" id="loginLink">Войти по почте</a>
+      <div id="acctIn" hidden><b id="acctEmail"></b><span id="acctRole"></span><button type="button" class="linkbtn" id="logout">Выйти</button></div>
+    </div>
+    <div class="side-note"><strong>Только для себя</strong>Полные треки независимых артистов из Audius и Jamendo, плюс ваша собственная музыка.</div>
+  </aside>
+
+  <main>
+    <!-- HOME -->
+    <div class="view" id="v-home">
+      <section class="wave" id="wave" aria-labelledby="wave-h">
+        <div class="wave-top">
+          <span class="eyebrow" id="wave-eyebrow">Подобрано под вас</span>
+          <div class="moods" id="moods" role="group" aria-label="Настроение волны"></div>
+          <button class="chip-btn wc-btn" id="wcToggle" type="button" aria-expanded="false" aria-controls="waveCfg"><svg class="i"><use href="#i-gear"/></svg>Настроить</button>
+        </div>
+        <div class="wcfg" id="waveCfg" hidden>
+          <div class="wc-row"><label for="wcNovelty">Знакомое или новое</label><input id="wcNovelty" type="range" min="0" max="100" step="5"><small id="wcNoveltyV"></small></div>
+          <div class="wc-row"><label for="wcPop">Андеграунд или хиты</label><input id="wcPop" type="range" min="0" max="100" step="5"><small id="wcPopV"></small></div>
+          <div class="wc-row"><span>Темп</span><div class="seg" id="wcTempo" role="group" aria-label="Темп"><button type="button" data-v="any">Любой</button><button type="button" data-v="slow">Спокойный</button><button type="button" data-v="mid">Средний</button><button type="button" data-v="fast">Быстрый</button></div></div>
+          <div class="wc-row"><span>Вокал</span><div class="seg" id="wcVocals" role="group" aria-label="Вокал"><button type="button" data-v="any">Любой</button><button type="button" data-v="instrumental">Без слов</button><button type="button" data-v="vocal">С вокалом</button></div></div>
+          <div class="wc-row"><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox"><span>Только треки, которые можно скачать</span></label><button class="linkbtn" id="wcReset" type="button">Сбросить</button></div>
+        </div>
+        <h1 id="wave-h">Моя волна</h1>
+        <div class="wave-bottom">
+          <div class="now-left">
+            <button class="vibe" id="vibeBtn" type="button" aria-label="Включить мою волну">
+              <span class="knob"><svg id="vibeSvg" class="play"><use href="#i-play" id="vibeIcon"/></svg></span>
+            </button>
+            <div class="vibe-now" aria-live="polite">
+              <small id="vibeL">Моя волна</small>
+              <b id="vibeT">Нажмите, чтобы начать</b>
+              <span id="vibeA">Подстроится под ваш вкус</span>
+              <div class="vibe-acts" id="vibeActs" hidden>
+                <button class="chip-btn" id="wLike" type="button" aria-pressed="false"><svg class="i"><use href="#i-heart"/></svg>Нравится</button>
+                <button class="chip-btn" id="wBan" type="button"><svg class="i"><use href="#i-ban"/></svg>Не то</button>
+              </div>
+            </div>
+          </div>
+          <div class="now-right">
+            <div class="next-txt"><small>Дальше в волне</small><b id="nextT">—</b><span id="nextA"></span></div>
+            <span class="bigart" id="bigArt"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="onb" id="onb" hidden aria-labelledby="onb-h">
+        <div class="sec-h"><h2 id="onb-h">Что вам нравится?</h2></div>
+        <p>Отметьте пару жанров, чтобы волна сразу попала в настроение. Дальше она учится на лайках и пропусках.</p>
+        <div class="genres" id="onbGenres"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="greet">
+        <div class="sec-h"><h2 id="greet">Добрый день</h2></div>
+        <div class="quick" id="quick"></div>
+      </section>
+
+      <section class="sec" id="recentSec" hidden aria-labelledby="rc-h">
+        <div class="sec-h"><h2 id="rc-h">Недавно слушали</h2><a class="more" href="#library">Вся история</a></div>
+        <div class="hrow" id="recent"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="fy-h">
+        <div class="sec-h"><h2 id="fy-h">Для вас</h2><small id="fyNote">собирается из вашей истории</small></div>
+        <div class="cards" id="cards"></div>
+      </section>
+
+      <section class="sec" id="artSec" hidden aria-labelledby="ar-h">
+        <div class="sec-h"><h2 id="ar-h">Любимые артисты</h2><a class="more" href="#welcome">Изменить</a></div>
+        <div class="hrow" id="favArtists"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="cht-h">
+        <div class="sec-h"><h2 id="cht-h">Чарты</h2><a class="more" href="#charts">Все чарты</a></div>
+        <div class="tracks" id="chTeaser" role="list"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="nw-h">
+        <div class="sec-h"><h2 id="nw-h">Новое</h2><small>свежие релизы недели</small></div>
+        <div class="hrow" id="newRow"></div>
+      </section>
+
+      <section class="sec" id="ownSec" hidden aria-labelledby="own-h">
+        <div class="sec-h"><h2 id="own-h">Ваша музыка</h2><small>загружено администратором</small></div>
+        <div class="hrow" id="ownRow"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="gt-h">
+        <div class="sec-h"><h2 id="gt-h">Жанры и настроения</h2></div>
+        <div class="gtiles" id="gTiles"></div>
+      </section>
+
+      <section class="sec" aria-labelledby="tr-h">
+        <div class="sec-h"><h2 id="tr-h">Популярное на неделе</h2><small id="trNote"></small></div>
+        <div class="tracks" id="trending" role="list"></div>
+      </section>
+    </div>
+
+    <!-- SEARCH -->
+    <div class="view" id="v-search" hidden>
+      <section class="ai" aria-labelledby="ai-h">
+        <div class="ai-head"><span class="ai-badge"><svg class="i"><use href="#i-spark"/></svg>ИИшка</span><h2 id="ai-h">Соберу плейлист под задачу</h2></div>
+        <form class="ai-form" id="aiForm">
+          <input id="aiQ" type="text" autocomplete="off" placeholder="Например: под учёбу, без слов, часа на два" aria-label="Опишите плейлист">
+          <button class="btn solid" type="submit" id="aiGo">Собрать</button>
+        </form>
+        <div class="genres" id="aiChips"></div>
+      </section>
+      <section class="sec" id="aiOut" hidden aria-labelledby="aiT">
+        <div class="sec-h"><h2 id="aiT"></h2><div class="row"><small id="aiNote"></small><button class="btn" type="button" id="aiPlay">Слушать</button><button class="btn" type="button" id="aiSave">Сохранить</button></div></div>
+        <div class="tracks" id="aiList" role="list"></div>
+      </section>
+      <label class="search">
+        <svg class="i" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="q" type="search" placeholder="Трек, исполнитель или жанр" autocomplete="off" aria-label="Поиск музыки">
+      </label>
+      <div class="filters">
+        <button class="mood" id="fDl" type="button" aria-pressed="false">Только со скачиванием</button>
+        <button class="mood" data-src="all" type="button" aria-pressed="true">Все источники</button>
+        <button class="mood" data-src="audius" type="button" aria-pressed="false">Audius</button>
+        <button class="mood" data-src="jamendo" type="button" aria-pressed="false">Jamendo</button>
+      </div>
+      <section class="sec" aria-labelledby="sr-h">
+        <div class="sec-h"><h2 id="sr-h">Поиск</h2><small id="srNote"></small></div>
+        <div class="tracks" id="results" role="list"></div>
+      </section>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="view" id="v-charts" hidden>
+      <section class="sec" aria-labelledby="ch-h">
+        <div class="sec-h"><h2 id="ch-h">Чарты Spotify</h2><small id="chNote"></small></div>
+        <div class="genres" id="chCountries" role="group" aria-label="Страна чарта"></div>
+        <p class="src ch-hint">Spotify не отдаёт сами песни, поэтому рядом с каждым треком мы ищем его на Audius. «Оригинал» значит, что артист выложил трек сам. «Версия» означает ремикс, кавер или перезалив.</p>
+        <div class="row"><button class="btn solid" id="chPlay" type="button">Слушать то, что нашлось</button><small class="src" id="chProg"></small></div>
+      </section>
+      <div class="charts" id="chList" role="list"></div>
+    </div>
+
+    <!-- LIBRARY -->
+    <div class="view" id="v-library" hidden>
+      <section class="sec" aria-labelledby="lk-h">
+        <div class="sec-h"><h2 id="lk-h">Любимое</h2><small id="lkNote"></small></div>
+        <div class="tracks" id="liked" role="list"></div>
+      </section>
+      <section class="sec" aria-labelledby="pl-h">
+        <div class="sec-h"><h2 id="pl-h">Мои плейлисты</h2></div>
+        <div class="cards" id="playlists"></div>
+      </section>
+      <section class="sec" aria-labelledby="hs-h">
+        <div class="sec-h"><h2 id="hs-h">Недавно слушали</h2></div>
+        <div class="tracks" id="history" role="list"></div>
+      </section>
+    </div>
+
+    <!-- LOGIN -->
+    <div class="view" id="v-login" hidden>
+      <section class="login" aria-labelledby="lg-h">
+        <h2 id="lg-h">Вход по почте</h2>
+        <p>Пришлём шестизначный код. Пароль не нужен.</p>
+        <form id="lgForm" class="field">
+          <label for="lgEmail">Почта</label>
+          <input id="lgEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+          <div id="lgCodeWrap" hidden class="field">
+            <label for="lgCode">Код из письма</label>
+            <input id="lgCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+          </div>
+          <small id="lgNote"></small>
+          <div class="row"><button class="btn solid" type="submit" id="lgGo">Получить код</button><button class="linkbtn" type="button" id="lgBack" hidden>Другая почта</button></div>
+        </form>
+      </section>
+    </div>
+
+    <!-- UPLOAD (admin) -->
+    <div class="view" id="v-upload" hidden>
+      <section class="sec" aria-labelledby="up-h">
+        <div class="sec-h"><h2 id="up-h">Загрузить музыку</h2><small>WAV, FLAC и MP3 хранятся без перекодирования</small></div>
+        <form id="upForm" class="upform">
+          <label class="drop" id="drop" for="upFile"><svg class="i"><use href="#i-up"/></svg><b id="dropT">Перетащите аудиофайл или нажмите</b><span>до 500 МБ</span></label>
+          <input id="upFile" type="file" accept=".mp3,.wav,.flac,.ogg,.m4a,.aac,audio/*" hidden>
+          <div class="upgrid">
+            <div class="field"><label for="upTitle">Название</label><input id="upTitle" required></div>
+            <div class="field"><label for="upArtist">Исполнитель</label><input id="upArtist" required></div>
+            <div class="field"><label for="upGenre">Жанр</label><input id="upGenre" list="genreList" placeholder="Lo-Fi"></div>
+            <div class="field"><label for="upMood">Настроение</label><input id="upMood" list="moodList" placeholder="Peaceful"></div>
+            <div class="field"><label for="upBpm">Темп, BPM</label><input id="upBpm" type="number" min="30" max="250"></div>
+            <div class="field"><label for="upCover">Обложка</label><input id="upCover" type="file" accept="image/jpeg,image/png,image/webp"></div>
+          </div>
+          <datalist id="genreList"></datalist><datalist id="moodList"></datalist>
+          <div class="row"><button class="btn solid" type="submit" id="upGo">Загрузить</button><small id="upNote"></small></div>
+        </form>
+      </section>
+      <section class="sec" aria-labelledby="ul-h">
+        <div class="sec-h"><h2 id="ul-h">Загруженные треки</h2></div>
+        <div class="tracks" id="upList" role="list"></div>
+      </section>
+    </div>
+
+    <!-- PREFS -->
+    <div class="view" id="v-prefs" hidden>
+      <section class="sec" aria-labelledby="th-h">
+        <div class="sec-h"><h2 id="th-h">Оформление</h2></div>
+        <div class="themes" id="themes"></div>
+      </section>
+      <section class="sec" aria-labelledby="ts-h">
+        <div class="sec-h"><h2 id="ts-h">Ваш вкус</h2><small>так волна видит вас сейчас</small></div>
+        <div class="taste" id="taste"></div>
+        <div class="genres" id="prefGenres"></div>
+        <div class="row"><a class="btn solid" href="#welcome">Настроить вкус</a><button class="btn" id="resetTaste" type="button">Сбросить вкус</button><span class="src" id="resetNote"></span></div>
+      </section>
+      <section class="sec" aria-labelledby="src-h">
+        <div class="sec-h"><h2 id="src-h">Источники музыки</h2></div>
+        <div class="srcs" id="srcs"></div>
+      </section>
+    </div>
+
+    <!-- WELCOME / TASTE SETUP -->
+    <div class="view" id="v-welcome" hidden>
+      <section class="welcome" aria-labelledby="wl-h">
+        <span class="eyebrow">Настройка вкуса</span>
+        <h2 id="wl-h">Расскажите, что вы любите</h2>
+        <p>Волна сразу подстроится под ответы. Всё это можно поменять потом в настройках.</p>
+      </section>
+      <section class="sec step" aria-labelledby="st1">
+        <div class="sec-h"><h2 id="st1">Жанры</h2><small id="wlGenreNote">выберите несколько</small></div>
+        <div class="genres" id="wlGenres"></div>
+      </section>
+      <section class="sec step" aria-labelledby="st2">
+        <div class="sec-h"><h2 id="st2">Любимые артисты</h2><small>впишите имя и нажмите «Добавить»</small></div>
+        <form class="ai-form" id="wlArtistForm">
+          <input id="wlArtist" autocomplete="off" placeholder="Например: Skrillex, deadmau5" aria-label="Имя артиста">
+          <button class="btn solid" type="submit">Добавить</button>
+        </form>
+        <div class="genres" id="wlArtists"></div>
+        <small class="src" id="wlArtistNote"></small>
+      </section>
+      <section class="sec step" aria-labelledby="st3">
+        <div class="sec-h"><h2 id="st3">Любимые песни</h2><small>найдите и нажмите на сердце: песня попадёт в любимое</small></div>
+        <label class="search">
+          <svg class="i" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="wlSong" type="search" autocomplete="off" placeholder="Название песни или исполнитель" aria-label="Поиск любимой песни">
+        </label>
+        <div class="tracks" id="wlSongs" role="list"></div>
+      </section>
+      <div class="row"><a class="btn solid" href="#home" id="wlDone">Готово, к моей волне</a><span class="src" id="wlSummary"></span></div>
+    </div>
+  </main>
+</div>
+
+<div class="player" id="player">
+  <div class="mini" id="mini"></div>
+  <div class="player-in">
+    <div class="np"><div class="c" id="npC"></div><div><b id="npT">Ничего не играет</b><span id="npA">Включите волну или найдите трек</span></div></div>
+    <div class="ctl">
+      <div class="ctl-b">
+        <button class="ib sec-ctl" id="shuf" type="button" aria-label="Перемешать" aria-pressed="false"><svg class="i"><use href="#i-shuffle"/></svg></button>
+        <button class="ib" id="prev" type="button" aria-label="Предыдущий трек"><svg class="i"><use href="#i-prev"/></svg></button>
+        <button class="ib main" id="play" type="button" aria-label="Воспроизвести"><svg class="i"><use href="#i-play" id="playIcon"/></svg></button>
+        <button class="ib" id="next" type="button" aria-label="Следующий трек"><svg class="i"><use href="#i-next"/></svg></button>
+        <button class="ib sec-ctl" id="npLike" type="button" aria-label="Нравится" aria-pressed="false"><svg class="i"><use href="#i-heart"/></svg></button>
+      </div>
+      <div class="bar"><span id="cur">0:00</span><div class="track" id="seek" role="slider" aria-label="Позиция в треке" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" id="fill"></div></div><span id="dur">0:00</span></div>
+    </div>
+    <div class="right">
+      <button class="ib" id="npDl" type="button" aria-label="Скачать трек"><svg class="i"><use href="#i-dl"/></svg></button>
+      <svg class="i" aria-hidden="true"><use href="#i-vol"/></svg><input class="vol" id="vol" type="range" min="0" max="100" value="80" aria-label="Громкость">
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<audio id="audio" preload="auto" crossorigin="anonymous"></audio>
+
+<script type="module" src="app.js?v=6"></script>
+</body>
+</html>
