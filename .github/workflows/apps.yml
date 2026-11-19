@@ -40,7 +40,7 @@ jobs:
   ios:
     name: iOS (SwiftUI, unsigned IPA)
     if: github.event_name == 'push' || inputs.platform != 'windows'
-    runs-on: macos-14
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -70,10 +70,20 @@ jobs:
           mkdir -p Payload ../../dist
           cp -R build/Build/Products/Release-iphoneos/Echo.app Payload/
           zip -qry ../../dist/Echo.ipa Payload
+      - name: Package TrollStore build (CarPlay)
+        working-directory: apps/ios
+        run: |
+          brew install ldid
+          rm -rf ts && mkdir ts && cp -R Payload ts/
+          ldid -SSupport/CarPlay.entitlements ts/Payload/Echo.app/Echo
+          ldid -e ts/Payload/Echo.app/Echo | grep -q carplay-audio
+          (cd ts && zip -qry ../../../dist/Echo-TrollStore.tipa Payload)
       - uses: actions/upload-artifact@v4
         with:
           name: ios
-          path: dist/Echo.ipa
+          path: |
+            dist/Echo.ipa
+            dist/Echo-TrollStore.tipa
 
   release:
     name: Release
@@ -93,7 +103,11 @@ jobs:
           NOTES="Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe."
           if [ -f out/ios/Echo.ipa ]; then
             FILES="$FILES out/ios/Echo.ipa"
-            NOTES="$NOTES iPhone: Echo.ipa не подписан, установите через Sideloadly, AltStore или TrollStore."
+            NOTES="$NOTES iPhone: Echo.ipa не подписан, установите через Sideloadly или AltStore (без CarPlay)."
+            if [ -f out/ios/Echo-TrollStore.tipa ]; then
+              FILES="$FILES out/ios/Echo-TrollStore.tipa"
+              NOTES="$NOTES С CarPlay: Echo-TrollStore.tipa через TrollStore (разрешение CarPlay вшито в подпись, сертификат Apple не нужен)."
+            fi
           else
             NOTES="$NOTES Сборка для iPhone в этот раз не получилась, она будет в следующем релизе."
           fi
