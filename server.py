@@ -105,6 +105,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS yt_bad(id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS lyrics_cache(k TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS yt_cache(q TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, title TEXT NOT NULL, data TEXT NOT NULL, owner INTEGER, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, genre TEXT DEFAULT '',
             mood TEXT DEFAULT '', bpm REAL, ext TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
             cover TEXT DEFAULT '', created INTEGER NOT NULL, user_id INTEGER);
@@ -462,6 +463,40 @@ def spotify_cover_url(tid):
             _sp_covers.clear()
         _sp_covers[tid] = url
     return url
+
+
+# ---------- shared playlists: a snapshot of the tracks under a short public link ----------
+SHARE_SRC = {"audius", "jamendo", "local", "youtube", "spotify", "apple"}
+SHARE_STR = {"id", "src", "rawId", "title", "artist", "artistId", "genre", "mood", "key", "releaseDate", "quality", "ext",
+             "via", "channel", "extName"}
+SHARE_URL = {"cover", "coverSm", "stream", "dlOrig", "dlMp3", "link", "extLink"}
+SHARE_NUM = {"duration", "bpm", "plays", "views"}
+
+
+def clean_share_track(t):
+    if not isinstance(t, dict) or t.get("src") not in SHARE_SRC:
+        return None
+    out = {}
+    for k in SHARE_STR:
+        v = t.get(k)
+        if isinstance(v, str) and v:
+            out[k] = v[:300]
+    for k in SHARE_URL:
+        v = t.get(k)
+        # only our own API paths or https links: nothing that could run as a script when clicked
+        if isinstance(v, str) and len(v) < 600 and (re.fullmatch(r"/api/[A-Za-z0-9/_.%=&?:,+-]*", v) or re.fullmatch(r"https://[^\s<>\"'`]+", v)):
+            out[k] = v
+    for k in SHARE_NUM:
+        v = t.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 1e13:
+            out[k] = v
+    if isinstance(t.get("downloadable"), bool):
+        out["downloadable"] = t["downloadable"]
+    if t.get("catalog") is True:
+        out["catalog"] = True
+    if isinstance(t.get("tags"), list):
+        out["tags"] = [str(x)[:40] for x in t["tags"][:6]]
+    return out if out.get("id") and out.get("title") else None
 
 
 def au_url(route, params):
@@ -1191,6 +1226,16 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError, OSError, ValueError):
                 url = ""
             return self.proxy(url, cache="public, max-age=604800", kinds=("image/",)) if url else self.err(404, "Нет обложки")
+        m = re.fullmatch(r"/api/share/([A-Za-z0-9_-]{8,16})", path)
+        if m:
+            if limited("shareget:" + self.ip(), 300, 3600):
+                return self.err(429, "Слишком много запросов")
+            with db() as con:
+                row = con.execute("SELECT title, data, at FROM shares WHERE id=?", (m.group(1),)).fetchone()
+            if not row:
+                return self.err(404, "Ссылка не найдена или устарела")
+            d = json.loads(row["data"])
+            return self.send_json({"title": row["title"], "desc": d.get("desc", ""), "tracks": d.get("tracks", []), "at": row["at"]})
         if path == "/api/img":
             u = (urllib.parse.parse_qs(parsed.query).get("u") or [""])[0]
             if not IMG_HOSTS.fullmatch(u):
@@ -1256,6 +1301,22 @@ class Handler(BaseHTTPRequestHandler):
                 if limited(f"ai:{u['id']}", 40, 86400) or limited("ai:all", 400, 86400):
                     return self.send_json({"plan": rule_plan(prompt), "limited": True})
                 return self.send_json({"plan": ai_plan(prompt)})
+            if path == "/api/share":
+                if limited("share:" + self.ip(), 30, 3600) or limited("share:all", 3000, 86400):
+                    return self.err(429, "Слишком много ссылок, попробуйте позже")
+                body = self.read_json(limit=2 * 1024 * 1024) or {}
+                title = re.sub(r"\s+", " ", str(body.get("title", "")))[:80].strip() or "Плейлист"
+                desc = re.sub(r"\s+", " ", str(body.get("desc", "")))[:200].strip()
+                raw = body.get("tracks") if isinstance(body.get("tracks"), list) else []
+                tracks = [c for c in (clean_share_track(t) for t in raw[:500]) if c]
+                if not tracks:
+                    return self.err(400, "В плейлисте нет треков")
+                u = self.user()
+                sid = secrets.token_urlsafe(8)
+                with db() as con:
+                    con.execute("INSERT INTO shares(id,title,data,owner,at) VALUES(?,?,?,?,?)",
+                                (sid, title, json.dumps({"desc": desc, "tracks": tracks}, ensure_ascii=False), u["id"] if u else None, int(time.time())))
+                return self.send_json({"id": sid, "url": f"{CFG['site_url']}/#pl-{sid}"})
             if path == "/api/yt/bad":
                 body = self.read_json() or {}
                 vid = str(body.get("id", ""))

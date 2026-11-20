@@ -1,8 +1,8 @@
-import * as A from "./api.js?v=20";
-import * as R from "./recs.js?v=20";
-import { createFx } from "./fx.js?v=20";
-import { downloadOptions, download } from "./download.js?v=20";
-import * as E from "./engine.js?v=20";
+import * as A from "./api.js?v=22";
+import * as R from "./recs.js?v=22";
+import { createFx } from "./fx.js?v=22";
+import { downloadOptions, download } from "./download.js?v=22";
+import * as E from "./engine.js?v=22";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -1004,6 +1004,50 @@ function renderPlView() {
 $("plNew").onclick = () => { openPl = R.createPlaylist(`Плейлист ${R.P.playlists.length + 1}`); renderLibrary(); $("plView").scrollIntoView({ behavior: "smooth" }); };
 $("plvPlay").onclick = () => { const p = R.playlistById(openPl); if (p) playList(p.tracks.map((t) => A.refresh({ ...t })), 0, "list"); };
 $("plvClose").onclick = () => { openPl = null; renderPlView(); };
+$("plvShare").onclick = async () => {
+  const p = R.playlistById(openPl); if (!p) return;
+  if (!p.tracks.length) return toast("Сначала добавьте в плейлист треки");
+  const b = $("plvShare"); b.disabled = true;
+  try {
+    const r = await A.api("/api/share", { method: "POST", body: { title: p.title, desc: p.desc || "", tracks: p.tracks.slice(0, 500) } });
+    let copied = false;
+    if (navigator.share && matchMedia("(pointer:coarse)").matches) { try { await navigator.share({ title: p.title, text: `Плейлист «${p.title}» в Эхо`, url: r.url }); copied = true; } catch {} }
+    if (!copied) { try { await navigator.clipboard.writeText(r.url); toast("Ссылка на плейлист скопирована"); } catch { prompt("Ссылка на плейлист", r.url); } }
+  } catch (err) { toast(err.message || "Не удалось создать ссылку"); }
+  b.disabled = false;
+};
+
+// ---------------- a shared playlist opened by link: #pl-<id> ----------------
+let shared = null;
+async function openShared(id) {
+  const dlg = $("shareDlg");
+  $("shT").textContent = "Загружаю плейлист…"; $("shN").textContent = ""; $("shArt").innerHTML = ""; loading($("shTracks"), 4);
+  if (!dlg.open) dlg.showModal();
+  try {
+    const d = await A.api(`/api/share/${id}`);
+    const safe = (u) => (typeof u === "string" && (u.startsWith("/api/") || u.startsWith("https://")) ? u : "");
+    const tracks = (d.tracks || []).map((t) => A.refresh({ ...t, link: safe(t.link), extLink: safe(t.extLink), cover: safe(t.cover), coverSm: safe(t.coverSm), stream: safe(t.stream) }));
+    shared = { title: d.title, desc: d.desc, tracks };
+    $("shT").textContent = d.title;
+    const mins = Math.round(tracks.reduce((s, t) => s + (t.duration || 0), 0) / 60);
+    $("shN").textContent = `${tracks.length} треков${mins ? ` · ${mins} мин` : ""}`;
+    $("shArt").innerHTML = tracks.slice(0, 4).map((t, i) => cv(t.coverSm || t.cover, i)).join("");
+    $("shArt").classList.toggle("one", tracks.length < 4);
+    rows($("shTracks"), tracks.slice(0, 50));
+  } catch (err) {
+    shared = null;
+    $("shT").textContent = "Плейлист не открылся"; $("shTracks").innerHTML = `<div class="status err">${esc(err.message || "Ссылка не найдена")}</div>`;
+  }
+}
+$("shPlay").onclick = () => { if (!shared?.tracks.length) return; $("shareDlg").close(); playList(shared.tracks.slice(), 0, "list"); };
+$("shAdd").onclick = () => {
+  if (!shared?.tracks.length) return;
+  const id = R.createPlaylist(shared.title, shared.tracks, shared.desc || "");
+  $("shareDlg").close(); toast(`Плейлист «${shared.title}» добавлен в коллекцию`);
+  openPl = id; location.hash = "#library";
+};
+$("shClose").onclick = () => $("shareDlg").close();
+$("shareDlg").addEventListener("click", (e) => { if (e.target === $("shareDlg")) $("shareDlg").close(); });
 $("plvRename").onclick = () => {
   const h = $("plv-h");
   if (h.isContentEditable) { R.renamePlaylist(openPl, h.textContent); h.contentEditable = "false"; $("plvRename").textContent = "Переименовать"; renderLibrary(); return; }
@@ -1426,6 +1470,8 @@ audio.addEventListener("loadedmetadata", () => { audio.playbackRate = FX.rate; a
 // ---------------- router ----------------
 const VIEWS = ["home", "search", "charts", "library", "login", "upload", "prefs", "welcome"];
 function route() {
+  const sh = /^#pl-([A-Za-z0-9_-]{8,16})$/.exec(location.hash);
+  if (sh) { history.replaceState(null, "", location.pathname + location.search + "#home"); openShared(sh[1]); }
   let v = location.hash.slice(1) || "home";
   if (!VIEWS.includes(v)) v = "home";
   if (v === "upload" && me?.role !== "admin") v = me ? "home" : "login";

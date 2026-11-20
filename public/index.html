@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=20">
+<link rel="stylesheet" href="styles.css?v=22">
 <script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
 </head>
 <body>
@@ -230,7 +230,7 @@
         <div class="cards" id="playlists"></div>
       </section>
       <section class="sec" id="plView" hidden aria-labelledby="plv-h">
-        <div class="sec-h"><h2 id="plv-h"></h2><div class="row"><small id="plvNote"></small><button class="btn solid" type="button" id="plvPlay">Слушать</button><button class="btn" type="button" id="plvRename">Переименовать</button><button class="linkbtn" type="button" id="plvDel">Удалить</button><button class="linkbtn" type="button" id="plvClose">Закрыть</button></div></div>
+        <div class="sec-h"><h2 id="plv-h"></h2><div class="row"><small id="plvNote"></small><button class="btn solid" type="button" id="plvPlay">Слушать</button><button class="btn" type="button" id="plvShare">Поделиться</button><button class="btn" type="button" id="plvRename">Переименовать</button><button class="linkbtn" type="button" id="plvDel">Удалить</button><button class="linkbtn" type="button" id="plvClose">Закрыть</button></div></div>
         <div class="tracks" id="plTracks" role="list"></div>
       </section>
       <section class="sec" aria-labelledby="hs-h">
@@ -400,9 +400,14 @@
   <div class="yt-frame"><div id="ytplayer"></div></div>
   <div class="yt-src"><span>Источник: <b>YouTube</b> · только прослушивание</span><span><a id="ytLink" href="https://www.youtube.com" target="_blank" rel="noopener">YouTube</a> · <a id="ytSpot" href="https://open.spotify.com" target="_blank" rel="noopener">Spotify</a></span></div><span id="ytChannel" hidden></span>
 </div>
+<dialog class="share" id="shareDlg" aria-labelledby="shT">
+  <div class="sh-top"><div class="sh-art" id="shArt"></div><div class="sh-meta"><small>Вам прислали плейлист</small><h2 id="shT"></h2><span id="shN"></span></div></div>
+  <div class="tracks" id="shTracks" role="list"></div>
+  <div class="sh-acts"><button class="btn solid" type="button" id="shPlay">Слушать</button><button class="btn" type="button" id="shAdd">Добавить к себе</button><button class="linkbtn" type="button" id="shClose">Закрыть</button></div>
+</dialog>
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
-<script type="module" src="app.js?v=20"></script>
+<script type="module" src="app.js?v=22"></script>
 </body>
 </html>

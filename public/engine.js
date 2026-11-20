@@ -9,8 +9,8 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=20";
-import * as R from "./recs.js?v=20";
+import * as A from "./api.js?v=22";
+import * as R from "./recs.js?v=22";
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
