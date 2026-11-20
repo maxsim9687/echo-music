@@ -9,7 +9,7 @@ on:
       platform:
         description: "Что собирать"
         type: choice
-        options: [all, ios, windows]
+        options: [all, ios, windows, android]
         default: all
 
 permissions:
@@ -18,7 +18,7 @@ permissions:
 jobs:
   windows:
     name: Windows (WinUI 3)
-    if: github.event_name == 'push' || inputs.platform != 'ios'
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +39,7 @@ jobs:
 
   ios:
     name: iOS (SwiftUI, unsigned IPA)
-    if: github.event_name == 'push' || inputs.platform != 'windows'
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'ios'
     runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
@@ -85,10 +85,52 @@ jobs:
             dist/Echo.ipa
             dist/Echo-TrollStore.tipa
 
+  android:
+    name: Android (Kotlin, Compose, Android Auto)
+    if: github.event_name == 'push' || inputs.platform == 'all' || inputs.platform == 'android'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ECHO_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ECHO_KEYSTORE_PASSWORD }}
+        run: |
+          # With the repository's own key updates install over the old version; without it the build uses a
+          # temporary debug key (works, but each update needs the old app removed first).
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | tr -d '
+ ' | base64 -d > "$RUNNER_TEMP/release.p12"
+            PASS=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '
+')
+            echo "::add-mask::$PASS"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$PASS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=echo" >> "$GITHUB_ENV"
+          fi
+      - name: Build APK
+        working-directory: apps/android
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+      - run: mkdir -p dist && cp apps/android/app/build/outputs/apk/release/app-release.apk dist/Echo-Android.apk && ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/Echo-Android.apk
+
   release:
     name: Release
-    needs: [windows, ios]
-    if: always() && needs.windows.result == 'success'
+    needs: [windows, ios, android]
+    if: always() && (needs.windows.result == 'success' || needs.android.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -99,8 +141,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="apps-${{ github.run_number }}"
-          FILES="out/windows/Echo-Windows-x64.zip"
-          NOTES="Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe."
+          FILES=""
+          NOTES=""
+          if [ -f out/windows/Echo-Windows-x64.zip ]; then
+            FILES="out/windows/Echo-Windows-x64.zip"
+            NOTES="Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe."
+          fi
+          if [ -f out/android/Echo-Android.apk ]; then
+            FILES="$FILES out/android/Echo-Android.apk"
+            NOTES="$NOTES Android: установите Echo-Android.apk (разрешите установку из этого источника). Для Android Auto включите «Неизвестные источники» в режиме разработчика Android Auto."
+          fi
           if [ -f out/ios/Echo.ipa ]; then
             FILES="$FILES out/ios/Echo.ipa"
             NOTES="$NOTES iPhone: Echo.ipa не подписан, установите через Sideloadly или AltStore (без CarPlay)."
