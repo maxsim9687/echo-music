@@ -10,6 +10,8 @@ import mimetypes
 import os
 import re
 import secrets
+
+import recsys
 import smtplib
 import sqlite3
 import ssl
@@ -105,6 +107,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS yt_bad(id TEXT PRIMARY KEY, n INTEGER NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS lyrics_cache(k TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS yt_cache(q TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS song_meta(k TEXT PRIMARY KEY, genre TEXT NOT NULL, year INTEGER NOT NULL, explicit INTEGER NOT NULL, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, title TEXT NOT NULL, data TEXT NOT NULL, owner INTEGER, at INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, genre TEXT DEFAULT '',
             mood TEXT DEFAULT '', bpm REAL, ext TEXT NOT NULL, size INTEGER NOT NULL, duration REAL,
@@ -559,7 +562,13 @@ def hits_loop():
     time.sleep(20)
     while True:
         try:
-            entries = []  # Russian chart first: most listeners are there, it has the fewest songs in the YouTube lists
+            entries = []  # songs listeners' taste asks for, then the Russian chart, then the rest
+            try:
+                personal = recsys.match_queue(25)
+            except Exception as e:
+                personal = []
+                print("hits: personal queue", type(e).__name__, flush=True)
+            entries += personal
             for src, cc in (("apple", "ru"), ("spotify", "global"), ("spotify", "kz"), ("apple", "us")):
                 try:
                     items = apple_top(cc).get("data", []) if src == "apple" else spotify_chart(cc).get("items", [])
@@ -608,10 +617,80 @@ def hits_loop():
                 if not cached:
                     time.sleep(3)
             _matched.update(map=m, at=time.time())
+            try:
+                recsys.match_done([hit_key(a, t) for a, t in personal if hit_key(a, t) in m])
+            except Exception:
+                pass
             print("hits: matched", len(m), "of", len(entries), flush=True)
         except Exception as e:
             print("hits loop:", type(e).__name__, e, flush=True)
         time.sleep(3600)
+
+
+# ---------- song metadata (genre, year, explicit) for the hits, from Apple's public catalog ----------
+# The wave's taste model needs a genre for every hit. YouTube and the charts do not give one, Apple's catalog does.
+# Looked up slowly in the background (Apple allows ~20 searches a minute) and kept for good.
+_meta_json = {"v": None, "at": 0}
+
+
+def _meta_lookup(artist, title):
+    a_key = hit_key(artist, "x").split("|")[0]
+    t_key = hit_key("x", title).split("|")[1]
+    for cc in ("us", "ru"):
+        url = "https://itunes.apple.com/search?" + urllib.parse.urlencode({"term": f"{artist.split(',')[0]} {title}"[:120], "entity": "song", "limit": 5, "country": cc})
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=12) as r:
+            res = json.loads(r.read(2_000_000)).get("results") or []
+        for x in res:
+            ak = hit_key(x.get("artistName", ""), "x").split("|")[0]
+            tk = hit_key("x", x.get("trackName", "")).split("|")[1]
+            if a_key and t_key and a_key.split(" ")[0] in ak and tk.startswith(t_key.split(" ")[0]):
+                return x.get("primaryGenreName", ""), int((x.get("releaseDate") or "0")[:4] or 0), x.get("trackExplicitness") == "explicit"
+        time.sleep(3.2)
+    return "", 0, False
+
+
+def meta_loop():
+    time.sleep(40)
+    while True:
+        try:
+            todo = {}
+            for name in YT_LISTS:
+                try:
+                    for v in yt_list(name):
+                        todo.setdefault(hit_key(v.get("artist"), v.get("title")), (v.get("artist", ""), v.get("title", "")))
+                except Exception:
+                    pass
+            for v in _matched["map"].values():
+                todo.setdefault(hit_key(v["artist"], v["title"]), (v["artist"], v["title"]))
+            with db() as con:
+                have = {r["k"] for r in con.execute("SELECT k FROM song_meta")}
+            left = [(k, a, t) for k, (a, t) in todo.items() if k not in have and a and t]
+            print("meta: to look up", len(left), flush=True)
+            for k, a, t in left[:600]:
+                try:
+                    g, y, ex = _meta_lookup(a, t)
+                except urllib.error.HTTPError as e:
+                    print("meta: apple HTTP", e.code, flush=True)
+                    time.sleep(120)
+                    continue
+                except Exception:
+                    time.sleep(10)
+                    continue
+                with db() as con:
+                    con.execute("INSERT OR REPLACE INTO song_meta(k,genre,year,explicit,at) VALUES(?,?,?,?,?)", (k, g, y, int(ex), int(time.time())))
+                _meta_json["v"] = None
+                time.sleep(3.2)
+        except Exception as e:
+            print("meta loop:", type(e).__name__, e, flush=True)
+        time.sleep(600)
+
+
+def meta_all():
+    if _meta_json["v"] is None or time.time() - _meta_json["at"] > 600:
+        with db() as con:
+            rows = con.execute("SELECT k, genre, year, explicit FROM song_meta WHERE genre != ''").fetchall()
+        _meta_json.update(v={r["k"]: [r["genre"], r["year"], r["explicit"]] for r in rows}, at=time.time())
+    return _meta_json["v"]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1043,6 +1122,19 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print("%s %s" % (self.ip(), fmt % args), flush=True)
 
+    def rec_user(self):
+        """Who the recommender learns for: the account if signed in, else the browser's anonymous id.
+        A guest who signs in keeps what was learned while they were a guest."""
+        u = self.user()
+        anon = (self.headers.get("X-Anon") or "").strip().lower()
+        guest = "a:" + anon if re.fullmatch(r"[0-9a-f]{32}", anon) else None
+        if u:
+            who = f"u:{u['id']}"
+            if guest:
+                recsys.merge_guest(guest, who)
+            return who
+        return guest
+
     def ip(self):
         xff = self.headers.get("X-Forwarded-For", "") if self.client_address[0] == "127.0.0.1" else ""
         return (xff.split(",")[-1].strip() if xff else self.client_address[0])[:64]
@@ -1293,6 +1385,17 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
                 print(m.group(1), "search error:", type(e).__name__, e, flush=True)
                 return self.err(504, ("Apple Music" if m.group(1) == "apple" else "Spotify") + " не ответил")
+        if path in ("/api/rec/candidates", "/api/rec/explain"):
+            who = self.rec_user()
+            if not who:
+                return self.err(400, "Нет идентификатора слушателя")
+            if limited("rec:" + self.ip(), 600, 3600):
+                return self.err(429, "Слишком много запросов")
+            if path == "/api/rec/explain":
+                return self.send_json(recsys.explain(who))
+            return self.send_json({"data": recsys.candidates(who)})
+        if path == "/api/meta":
+            return self.send_json({"map": meta_all()})
         if path == "/api/hits/matched":
             return self.send_json({"map": _matched["map"], "at": int(_matched["at"])})
         if path == "/api/apple/top":
@@ -1386,6 +1489,24 @@ class Handler(BaseHTTPRequestHandler):
                 if limited(f"ai:{u['id']}", 40, 86400) or limited("ai:all", 400, 86400):
                     return self.send_json({"plan": rule_plan(prompt), "limited": True})
                 return self.send_json({"plan": ai_plan(prompt)})
+            if path == "/api/rec/reset":
+                who = self.rec_user()
+                if who:
+                    recsys.reset(who)
+                return self.send_json({"ok": True})
+            if path in ("/api/rec/events", "/api/rec/rank"):
+                who = self.rec_user()
+                if not who:
+                    return self.err(400, "Нет идентификатора слушателя")
+                if limited("rec:" + self.ip(), 600, 3600):
+                    return self.err(429, "Слишком много запросов")
+                body = self.read_json(limit=1024 * 1024) or {}
+                if path == "/api/rec/events":
+                    ev = body.get("events") if isinstance(body.get("events"), list) else []
+                    return self.send_json({"ok": True, "stored": recsys.add_events(who, ev)})
+                cands = body.get("candidates") if isinstance(body.get("candidates"), list) else []
+                ctx = body.get("ctx") if isinstance(body.get("ctx"), dict) else {}
+                return self.send_json({"scores": recsys.rank(who, cands, ctx)})
             if path == "/api/share":
                 if limited("share:" + self.ip(), 30, 3600) or limited("share:all", 3000, 86400):
                     return self.err(429, "Слишком много ссылок, попробуйте позже")
@@ -1667,6 +1788,9 @@ if __name__ == "__main__":
     init_db()
     threading.Thread(target=warm_loop, daemon=True).start()
     threading.Thread(target=hits_loop, daemon=True).start()
+    threading.Thread(target=meta_loop, daemon=True).start()
+    recsys.init(db=db, hit_key=hit_key, yt_list=yt_list, yt_lists=lambda: list(YT_LISTS),
+                matched=lambda: _matched["map"], ua=UA)
     srv = ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), CFG["port"]), Handler)
     print(f"Эхо запущено: http://localhost:{CFG['port']}  (админы: {len(CFG['admins'])}, почта: {'да' if CFG['smtp_host'] else 'нет'})")
     srv.serve_forever()

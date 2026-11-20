@@ -9,8 +9,46 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=24";
-import * as R from "./recs.js?v=24";
+import * as A from "./api.js?v=31";
+import * as R from "./recs.js?v=31";
+import * as TS from "./taste.js?v=31";
+
+// ---------------------------------------------------------------- server taste model (recsys.py)
+// The server keeps one model per listener (taste with decay, related-artist graph, neural network, collaborative
+// filtering). Before a batch is picked the best local candidates are sent to it; its score joins the local one.
+const SERVER = new Map(); // id → [score, reason, at]
+let serverDirty = true;
+R.onRecFlush(() => { serverDirty = true; });
+export async function serverRank(cands, ctx = {}, max = 320) {
+  const now = Date.now();
+  const fresh = (id) => { const v = SERVER.get(id); return v && !serverDirty && now - v[2] < 5 * 60e3; };
+  const need = cands.filter((t) => !fresh(t.id));
+  if (!need.length) return;
+  const loc = need.map((t) => ({ t, s: score(t, { ...ctx, noServer: true }).s })).filter((x) => x.s > -1e8).sort((a, b) => b.s - a.s).slice(0, max);
+  if (!loc.length) return;
+  try {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 2500);
+    const r = await fetch("/api/rec/rank", {
+      method: "POST", signal: ctl.signal, credentials: "same-origin",
+      headers: { "X-Echo": "1", "Content-Type": "application/json", ...(A.ANON ? { "X-Anon": A.ANON } : {}) },
+      body: JSON.stringify({ candidates: loc.map((x) => R.slim(x.t)), ctx: { mood: ctx.mood || "" } }),
+    }).finally(() => clearTimeout(timer));
+    if (!r.ok) return;
+    const { scores } = await r.json();
+    for (const [id, v] of Object.entries(scores || {})) SERVER.set(id, [v[0], v[1], now]);
+    serverDirty = false;
+  } catch {} // the wave works without the server model, just less personal
+}
+let metaAt = 0;
+function loadMeta() {
+  if (Date.now() - metaAt < 30 * 60e3) return;
+  metaAt = Date.now();
+  A.api("/api/meta").then((d) => { TS.setMeta(d.map); }).catch(() => { metaAt = 0; });
+}
+async function forYou() {
+  const d = await A.api("/api/rec/candidates");
+  return (d.data || []).map((x) => (x.yt ? A.fromYouTubeCatalog(x.yt, "foryou") : A.refresh({ ...x.t }))).filter((t) => t.title);
+}
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -102,9 +140,14 @@ function features(t) {
   const f = new Set();
   if (t.genre) f.add("g:" + t.genre.toLowerCase());
   if (t.mood) f.add("m:" + t.mood.toLowerCase());
-  for (const tag of (t.tags || []).slice(0, 8)) f.add("t:" + tag.toLowerCase());
+  // service tags ("youtube", "hit", chart regions) say where a song came from, not what it sounds like:
+  // with them every YouTube hit looked "similar to your likes"
+  for (const tag of (t.tags || []).slice(0, 8)) { const k = tag.toLowerCase(); if (!SERVICE_TAGS.has(k) && !REGION_TAG.test(k)) f.add("t:" + k); }
+  const g = TS.infoOf(t).genre; if (g && g !== "Other") f.add("G:" + g);
   return f;
 }
+const SERVICE_TAGS = new Set(["youtube", "hit", "classic hit", "latin", "chart"]);
+const REGION_TAG = /^(usa|uk|india|mexico|brazil|argentina|colombia|chile|peru|spain|puerto rico|russia|germany|france|italy|japan|south korea|indonesia|philippines|turkey|global|worldwide)$/;
 let userVec = null;
 function buildUserVec() {
   const v = new Map();
@@ -157,7 +200,7 @@ function tagVia(list, via) { for (const t of list) t.via = t.via || via; return 
 const ytCache = {};
 // The public YouTube charts are full of regional film songs, "lyrical" uploads and channel compilations.
 // Keep songs in Latin or Cyrillic script that look like a single track.
-const CATALOG_JUNK = /cantajuego|cocomelon|pinkfong|baby shark|nursery|kids song|for kids|super simple|little baby|детск|для детей|мультик|full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs?\b|in cinemas|official song|official videos|\bfilm\b|movie|kapoor|khan\b|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
+const CATALOG_JUNK = /cantajuego|gummy bear|гумми|cocomelon|pinkfong|baby shark|nursery|kids song|for kids|super simple|little baby|детск|для детей|мультик|full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs?\b|in cinemas|official song|official videos|\bfilm\b|movie|kapoor|khan\b|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
 const FOREIGN_SCRIPT = /[؀-ۿऀ-෿฀-๿က-႟]/;
 async function ytCatalog(name) {
   if (ytCache[name] && Date.now() - ytCache[name].at < 3 * 3600e3) return ytCache[name].list;
@@ -348,6 +391,8 @@ export function sources(mood, cfg = {}) {
   }
   // the site's uploads join the wave only for listeners who like those artists, not for everyone
   add(A.localTracks().then((l) => l.filter((t) => R.P.likes[t.id] || (R.P.a[t.artistId] || 0) > 0.5)), "uploads");
+  loadMeta();
+  if (!cfg.onlyDl) add(forYou(), "foryou"); // the server's own picks: songs of artists related to yours
   if ((cfg.novelty ?? 50) < 60) jobs.push(Promise.resolve(tagVia(Object.values(R.P.likes).map((t) => A.refresh({ ...t })), "liked")));
   return jobs;
 }
@@ -358,17 +403,33 @@ const NOVEL_VIA = new Set(["explore", "underground", "youtube", "charts"]);
 
 export function score(t, ctx = {}) {
   if (R.P.ban[t.id] || (t.artistId && R.P.banA[t.artistId])) return { s: -1e9 };
-  if (t.unmatched && !(ctx.cfg && ctx.cfg.yt === false)) return { s: -1e9 };
+  // chart songs without a known video: only when the server is sure you will like them (the original is then
+  // searched once when it starts, and remembered for everyone)
+  if (t.unmatched && !(ctx.cfg && ctx.cfg.yt === false) && !ctx.noServer) {
+    const sv0 = SERVER.get(t.id);
+    if (!sv0 || sv0[0] < 0.8) return { s: -1e9 };
+  }
   const cfg = { ...R.WAVE_DEFAULTS, ...(ctx.cfg || {}) };
   if (cfg.onlyDl && !t.downloadable) return { s: -1e9 };
   if (cfg.yt === false && t.src === "youtube") return { s: -1e9 };
+  // listener's filters: genres, language, era, explicit
+  const inf = TS.infoOf(t);
+  if (cfg.genresOff?.length && inf.genre && cfg.genresOff.includes(inf.genre)) return { s: -1e9 };
+  if (cfg.genresOn?.length && !cfg.genresOn.includes(inf.genre)) return { s: -1e9 }; // "only these": unknown genre is not one of them
+  if (cfg.lang === "ru" && inf.lang !== "ru") return { s: -1e9 };
+  if (cfg.lang === "foreign" && inf.lang === "ru") return { s: -1e9 };
+  const era = TS.eraOf(inf.year);
+  if (cfg.era && cfg.era !== "any" && era && era !== cfg.era) return { s: -1e9 };
+  if (cfg.clean && inf.explicit) return { s: -1e9 };
   const nov = cfg.novelty / 100;
   const fam = 1.5 - nov;
   const why = [];
+  let filt = 0;
+  if (cfg.era && cfg.era !== "any" && !era) filt -= 1.5;
 
   // 1. explicit affinity
   const ga = R.P.g[t.genre] || 0, aa = R.P.a[t.artistId] || 0, ma = R.P.m[t.mood] || 0;
-  let s = (ga + 0.8 * ma + 0.9 * aa) * fam;
+  let s = (ga + 0.8 * ma + 0.9 * aa) * fam + filt;
   for (const tag of t.tags || []) s += (R.P.t[tag] || 0) * 0.25 * fam;
   if (aa > 3) why.push(["artist", 3 + aa / 5]);
   if (ga > 3) why.push(["genre", 2 + ga / 8]);
@@ -467,10 +528,18 @@ export function score(t, ctx = {}) {
 
   // 11. a little noise so equal scores shuffle
   s += rnd(-0.5, 0.5) * (ctx.explore ?? (0.5 + nov * 3));
+  // the server model's opinion (it sees your whole history and what related artists you will like)
+  const sv = !ctx.noServer && SERVER.get(t.id);
+  if (sv) {
+    if (sv[0] <= -50) return { s: -1e9 };
+    s += sv[0] * 3; // the server sees the whole history and the artist graph: it is the main voice
+    if (sv[1] && sv[0] > 1) { t._sr = sv[1]; why.push(["server", 2 + sv[0] / 2]); }
+  }
   return { s, why };
 }
 
 const REASON = {
+  server: (t) => t._sr || "Подобрано для вас",
   artist: (t) => `Вы часто слушаете ${t.artist}`,
   genre: (t) => `Вы любите ${t.genre}`,
   similar: () => "Похоже на ваше любимое",
@@ -523,7 +592,7 @@ export function pick(cands, n, ctx = {}) {
   const isLikedT = (t) => !!R.P.likes[t.id];
   const isFamiliar = (t) => (R.P.a[t.artistId] || 0) > 1.5 && !isLikedT(t);
   const likedCap = Math.round(n * Math.max(0, 0.4 - nov * 0.5));
-  let likedCount = 0;
+  let likedCount = 0, unmatchedCount = 0;
   const isDiscovery = (t) => Math.abs(R.P.g[genreKey(t)] || 0) < 1 && !isFamiliar(t);
 
   while (out.length < n) {
@@ -542,6 +611,7 @@ export function pick(cands, n, ctx = {}) {
       if ((perArtist[t.artistId] || 0) >= 2) continue;
       if (t.src === "youtube" && (perSrc.youtube || 0) >= srcCap) continue;
       if (isLikedT(t) && likedCount >= likedCap) continue;
+      if (t.unmatched && unmatchedCount >= 3) continue; // each costs one YouTube search when it plays
       let v = x.s;
       // flow against the track that will actually precede this one
       if (prev?.bpm && t.bpm) v -= Math.min(Math.abs(prev.bpm - t.bpm), 40) / 14;
@@ -564,6 +634,7 @@ export function pick(cands, n, ctx = {}) {
     perSrc[t.src] = (perSrc[t.src] || 0) + 1;
     if (isFamiliar(t)) familiarCount++;
     if (isLikedT(t)) likedCount++;
+    if (t.unmatched) unmatchedCount++;
     if (t.src === "youtube") ytCount++;
     prev = t;
   }
@@ -583,5 +654,5 @@ export function explain() {
 export const SOURCE_NAMES = {
   taste: "ваши жанры", artist: "любимые артисты", tags: "ваши теги", similar: "похожее на лайки", charts: "чарты Audius",
   underground: "андеграунд", explore: "открытия", youtube: "хиты YouTube", jamendo: "Jamendo", uploads: "ваша музыка",
-  liked: "любимое", mood: "настроение", other: "другое", spotify: "чарты Spotify", apple: "чарты Apple Music",
+  liked: "любимое", mood: "настроение", other: "другое", spotify: "чарты Spotify", apple: "чарты Apple Music", foryou: "для вас",
 };

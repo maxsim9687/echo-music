@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800;900&family=Space+Grotesk:wght@500;700&family=Instrument+Serif:ital@0;1&family=Archivo+Black&family=Manrope:wght@400;600;800&family=Unbounded:wght@500;800&family=DM+Serif+Display:ital@0;1&family=Sora:wght@300;400;600&display=swap">
-<link rel="stylesheet" href="styles.css?v=24">
+<link rel="stylesheet" href="styles.css?v=31">
 <script>try{const v=localStorage.getItem("echo.theme");if(v)document.documentElement.dataset.v=v}catch(e){}</script>
 </head>
 <body>
@@ -80,9 +80,16 @@
           <div class="wc-sl"><div class="wc-sl-h"><label for="wcPop">Популярность</label><em id="wcPopV"></em></div><input class="rng" id="wcPop" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Редкое</span><span>Хиты</span></div></div>
           <div class="wc-sl"><div class="wc-sl-h"><label for="wcVal">Настроение</label><em id="wcValV"></em></div><input class="rng" id="wcVal" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Грустное</span><span>Весёлое</span></div></div>
           <div class="wc-sl"><div class="wc-sl-h"><label for="wcEn">Энергия</label><em id="wcEnV"></em></div><input class="rng" id="wcEn" type="range" min="0" max="100" step="5"><div class="wc-ends"><span>Спокойное</span><span>Бодрое</span></div></div>
+          <div class="wc-sec">
+            <span class="wc-h">Жанры</span>
+            <div class="gchips" id="wcGenres" role="group" aria-label="Жанры волны"></div>
+            <small class="wc-hint">Нажмите один раз, чтобы играли только отмеченные жанры. Нажмите ещё раз, чтобы жанр никогда не попадал в волну.</small>
+          </div>
+          <div class="wc-row"><span>Язык</span><div class="seg" id="wcLang" role="group" aria-label="Язык"><button type="button" data-v="any">Любой</button><button type="button" data-v="ru">Русские</button><button type="button" data-v="foreign">Иностранные</button></div></div>
+          <div class="wc-row"><span>Эпоха</span><div class="seg" id="wcEra" role="group" aria-label="Эпоха"><button type="button" data-v="any">Любая</button><button type="button" data-v="new">Новинки</button><button type="button" data-v="2010s">2010-е</button><button type="button" data-v="2000s">2000-е</button><button type="button" data-v="classic">Классика</button></div></div>
           <div class="wc-row"><span>Темп</span><div class="seg" id="wcTempo" role="group" aria-label="Темп"><button type="button" data-v="any">Любой</button><button type="button" data-v="slow">Спокойный</button><button type="button" data-v="mid">Средний</button><button type="button" data-v="fast">Быстрый</button></div></div>
           <div class="wc-row"><span>Вокал</span><div class="seg" id="wcVocals" role="group" aria-label="Вокал"><button type="button" data-v="any">Любой</button><button type="button" data-v="instrumental">Без слов</button><button type="button" data-v="vocal">С вокалом</button></div></div>
-          <div class="wc-foot"><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox"><span>Только треки, которые можно скачать</span></label><button class="linkbtn" id="wcReset" type="button">Сбросить настройки</button></div>
+          <div class="wc-foot"><div class="tgls"><label class="tgl" for="wcClean"><input id="wcClean" type="checkbox" role="switch"><span>Без нецензурных песен</span></label><label class="tgl" for="wcDl"><input id="wcDl" type="checkbox" role="switch"><span>Только треки, которые можно скачать</span></label></div><button class="linkbtn" id="wcReset" type="button">Сбросить настройки</button></div>
         </div>
         <h1 id="wave-h">Моя волна</h1>
         <div class="wave-bottom">
@@ -291,6 +298,7 @@
       <section class="sec" aria-labelledby="ts-h">
         <div class="sec-h"><h2 id="ts-h">Ваш вкус</h2><small>так волна видит вас сейчас</small></div>
         <div class="taste" id="taste"></div>
+        <div class="brain" id="brain" aria-live="polite"></div>
         <div class="genres" id="prefGenres"></div>
         <div class="row"><a class="btn solid" href="#welcome">Настроить вкус</a><button class="btn" id="resetTaste" type="button">Сбросить вкус</button><span class="src" id="resetNote"></span></div>
       </section>
@@ -408,6 +416,6 @@
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
-<script type="module" src="app.js?v=24"></script>
+<script type="module" src="app.js?v=31"></script>
 </body>
 </html>

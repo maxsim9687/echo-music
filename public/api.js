@@ -82,8 +82,19 @@ async function getJSON(url, opt = {}, ttl = 0) {
 }
 
 // ---- own server ----
+// Guests get a random id so the server can keep their taste model; signing in merges it into the account.
+export const ANON = (() => {
+  try {
+    let v = localStorage.getItem("echo.anon");
+    if (!/^[0-9a-f]{32}$/.test(v || "")) {
+      v = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem("echo.anon", v);
+    }
+    return v;
+  } catch { return ""; }
+})();
 export function api(path, { method = "GET", body, headers = {}, raw } = {}) {
-  const h = { "X-Echo": "1", ...headers };
+  const h = { "X-Echo": "1", ...(ANON ? { "X-Anon": ANON } : {}), ...headers };
   let b = body;
   if (body !== undefined && !raw) { h["Content-Type"] = "application/json"; b = JSON.stringify(body); }
   return getJSON(path, { method, body: b, headers: h, credentials: "same-origin" });

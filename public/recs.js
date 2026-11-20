@@ -1,6 +1,35 @@
 // «Моя волна 2»: taste profile with time decay, instant session reaction, flow by tempo/key,
 // discovery slots and diversity re-ranking. Same algorithm is described in apps/SPEC.md for the native apps.
 const KEY = "echo.profile";
+import { ANON } from "./api.js?v=31";
+
+// ---- reactions for the server's taste model (recsys.py), sent in small batches ----
+const outbox = [];
+let flushT = 0;
+let onFlushed = () => {};
+export const onRecFlush = (fn) => { onFlushed = fn; };
+function report(kind, t, extra = {}) {
+  if (!t?.id) return;
+  outbox.push({ kind, t: slim(t), at: Date.now(), ...extra });
+  clearTimeout(flushT);
+  flushT = setTimeout(flushEvents, outbox.length >= 20 || kind === "ban" || kind === "like" ? 300 : 4000);
+}
+export function flushEvents() {
+  clearTimeout(flushT);
+  if (!outbox.length) return;
+  const events = outbox.splice(0, 100);
+  fetch("/api/rec/events", {
+    method: "POST", keepalive: true, credentials: "same-origin",
+    headers: { "X-Echo": "1", "Content-Type": "application/json", ...(ANON ? { "X-Anon": ANON } : {}) },
+    body: JSON.stringify({ events }),
+  }).then((r) => { if (r.ok) onFlushed(); else if (r.status >= 500) outbox.unshift(...events.slice(0, 50)); })
+    .catch(() => outbox.unshift(...events.slice(0, 50)));
+  if (outbox.length) flushT = setTimeout(flushEvents, 500);
+}
+try {
+  addEventListener("pagehide", flushEvents);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushEvents(); });
+} catch {}
 
 // ve: where the preset sits on the mood map [valence 0 = sad … 1 = happy, energy 0 = calm … 1 = intense].
 // yt: YouTube searches that really return this kind of music; ytArtists: names that mark a chart hit as matching.
@@ -22,7 +51,9 @@ export const MOOD_PRESETS = {
 };
 // sources: yt = YouTube Music hits, sp / ap = Spotify / Apple Music charts (played as full versions found elsewhere),
 // indie = Audius and Jamendo (independent artists, off by default: mostly unknown names)
-export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true, sp: true, ap: true, indie: false, valence: 50, energy: 50 };
+// filters: genresOn = only these genres, genresOff = never these, lang any|ru|foreign, era any|new|2010s|2000s|classic
+export const WAVE_DEFAULTS = { novelty: 50, popularity: 50, tempo: "any", vocals: "any", onlyDl: false, yt: true, sp: true, ap: true, indie: false, valence: 50, energy: 50,
+  genresOn: [], genresOff: [], lang: "any", era: "any", clean: false };
 const TEMPO = { slow: [0, 95], mid: [95, 125], fast: [125, 999] };
 export const STARTER_GENRES = ["Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Rock", "Pop", "Ambient", "Alternative", "Drum & Bass", "Techno", "Jazz", "R&B/Soul", "Trap", "Classical"];
 export const ALL_GENRES = [...STARTER_GENRES, "Deep House", "Tech House", "Dubstep", "Trance", "Downtempo", "Experimental", "Soundtrack", "Acoustic", "Funk", "Disco", "Synthwave", "Future Bass", "Metal", "Folk", "Latin", "Reggae", "World", "Hyperpop"];
@@ -147,10 +178,11 @@ export const sessionInfo = () => session.map((e) => ({ ...e }));
 
 // ---------- events ----------
 export function like(t) {
-  if (P.likes[t.id]) { delete P.likes[t.id]; learn(t, -2); return false; }
+  if (P.likes[t.id]) { delete P.likes[t.id]; learn(t, -2); report("unlike", t); return false; }
   P.likes[t.id] = { ...slim(t), likedAt: Date.now() };
   sessionPush(t, 1.5);
   learn(t, 3);
+  report("like", t);
   return true;
 }
 export const isLiked = (t) => !!(t && P.likes[t.id]);
@@ -159,6 +191,7 @@ export function addLike(t) {
   if (P.likes[t.id]) return false;
   P.likes[t.id] = { ...slim(t), likedAt: Date.now() };
   bump("g", t.genre, 1.5); bump("a", t.artistId, 1.5); if (t.artistId) P.an[t.artistId] = t.artist;
+  report("like", t);
   return true;
 }
 // ---- own playlists ----
@@ -188,19 +221,22 @@ export function ban(t) {
   }
   sessionPush(t, -2.5);
   learn(t, -5);
+  report("ban", t);
 }
 // seconds = how long it played before the skip
 export function skipped(t, seconds = 0) {
   P.skip[t.id] = Date.now();
   sessionPush(t, -1.5);
   learn(t, seconds < 10 ? -1.5 : -0.8);
+  report("skip", t, { secs: Math.round(seconds) });
 }
-export function finished(t) { sessionPush(t, 1); learn(t, 1.5); }
+export function finished(t) { sessionPush(t, 1); learn(t, 1.5); report("finish", t); }
 export function listened(t) {
   playedThisSession.add(t.id);
   P.hist = [{ ...slim(t), at: Date.now() }, ...P.hist.filter((h) => h.id !== t.id)].slice(0, 100);
   sessionPush(t, 1);
   learn(t, 0.5);
+  report("listen", t);
 }
 export function started(t) { playedThisSession.add(t.id); }
 export function seedGenre(g, on) { bump("g", g, on ? 4 : -4); save(); }

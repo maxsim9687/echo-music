@@ -1,8 +1,9 @@
-import * as A from "./api.js?v=24";
-import * as R from "./recs.js?v=24";
-import { createFx } from "./fx.js?v=24";
-import { downloadOptions, download } from "./download.js?v=24";
-import * as E from "./engine.js?v=24";
+import * as A from "./api.js?v=31";
+import * as R from "./recs.js?v=31";
+import { createFx } from "./fx.js?v=31";
+import { downloadOptions, download } from "./download.js?v=31";
+import * as E from "./engine.js?v=31";
+import * as TS from "./taste.js?v=31";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -399,6 +400,8 @@ function refillWave() {
     const p = await ensurePool(pl.mood, true);
     if (gen !== waveGen) return;
     const inQ = new Set(pl.queue.map((t) => t.id));
+    await E.serverRank(p.filter((t) => !inQ.has(t.id)), waveCtx());
+    if (gen !== waveGen) return;
     const add = E.pick(p.filter((t) => !inQ.has(t.id)), 8, waveCtx({ prev: pl.queue.at(-1), recent: pl.queue.slice(-8) }));
     pl.queue.push(...add); sync();
   })().finally(() => { refilling = null; });
@@ -411,6 +414,7 @@ async function startWave() {
   $("vibeT").textContent = "Подбираю треки…";
   try {
     const p = await ensurePool(pl.mood, true);
+    await E.serverRank(p, waveCtx());
     const q = E.pick(p, 6, waveCtx({ prev: cur(), recent: pl.queue.slice(Math.max(0, pl.i - 7), pl.i + 1) }));
     if (!q.length) throw new Error("empty");
     playList(q, 0, "wave");
@@ -435,6 +439,14 @@ function renderWaveCfg() {
   document.querySelectorAll("#wcSrc [data-k]").forEach((b) => b.setAttribute("aria-pressed", String(srcOn[b.dataset.k])));
   document.querySelectorAll("#wcTempo button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.tempo)));
   document.querySelectorAll("#wcVocals button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === W.vocals)));
+  document.querySelectorAll("#wcLang button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === (W.lang || "any"))));
+  document.querySelectorAll("#wcEra button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === (W.era || "any"))));
+  $("wcClean").checked = !!W.clean;
+  const on = new Set(W.genresOn || []), off = new Set(W.genresOff || []);
+  $("wcGenres").innerHTML = TS.GENRES.filter((g) => g !== "Other").map((g) => {
+    const st = on.has(g) ? "on" : off.has(g) ? "off" : "";
+    return `<button type="button" class="gchip ${st}" data-g="${esc(g)}" aria-label="${esc(TS.GENRE_RU[g])}: ${st === "on" ? "только этот" : st === "off" ? "исключён" : "любой"}"><span class="gi" aria-hidden="true"></span>${esc(TS.GENRE_RU[g])}</button>`;
+  }).join("");
   $("wcNoveltyV").textContent = W.novelty < 35 ? "больше любимого" : W.novelty > 65 ? "больше нового" : "поровну";
   $("wcPopV").textContent = W.popularity < 35 ? "андеграунд" : W.popularity > 65 ? "хиты" : "всё подряд";
   const val = W.valence ?? 50, en = W.energy ?? 50;
@@ -465,6 +477,16 @@ $("wcSrc").onclick = (e) => {
 document.querySelectorAll("#waveCfg .rng").forEach((r) => r.addEventListener("input", () => r.style.setProperty("--p", `${r.value}%`)));
 $("wcTempo").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ tempo: b.dataset.v }); };
 $("wcVocals").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ vocals: b.dataset.v }); };
+$("wcLang").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ lang: b.dataset.v }); };
+$("wcEra").onclick = (e) => { const b = e.target.closest("button"); if (b) setWave({ era: b.dataset.v }); };
+$("wcClean").onchange = (e) => setWave({ clean: e.target.checked });
+// genre chip: neutral → only these → never → neutral
+$("wcGenres").onclick = (e) => {
+  const b = e.target.closest("[data-g]"); if (!b) return;
+  const g = b.dataset.g, on = new Set(W.genresOn || []), off = new Set(W.genresOff || []);
+  if (on.has(g)) { on.delete(g); off.add(g); } else if (off.has(g)) off.delete(g); else on.add(g);
+  setWave({ genresOn: [...on], genresOff: [...off] });
+};
 $("wcReset").onclick = () => setWave({ ...R.WAVE_DEFAULTS });
 $("vibeBtn").onclick = () => (pl.mode === "wave" && cur() ? toggle() : startWave());
 $("moods").innerHTML = Object.keys(R.MOOD_PRESETS).map((m) => `<button class="mood" type="button" aria-pressed="false" data-m="${m}">${m}</button>`).join("");
@@ -1198,18 +1220,33 @@ function renderPrefs() {
   $("taste").innerHTML = bars("Жанры", "g", 6) + bars("Настроения", "m", 6) + bars("Артисты", "a", 6)
     + arms("Что заходит (жанры)", ex.genres) + arms("Откуда брать (источники)", ex.sources, E.SOURCE_NAMES)
     + `<div><h3>Память волны</h3><p class="src" style="margin:0">Волна помнит ${ex.served} предложенных треков и не повторяет их от 1 до 14 дней.</p></div>`;
+  renderBrain();
   $("prefGenres").innerHTML = R.STARTER_GENRES.map((g) => `<button class="mood" type="button" data-g="${esc(g)}" aria-pressed="${(R.P.g[g] || 0) > 0}">${esc(g)}</button>`).join("");
   $("srcs").innerHTML = `
     <div><b>Audius</b><span>Подключён. Полные треки, MP3 320 kbps. Скачивание там, где автор разрешил.</span></div>
     <div><b>Jamendo</b><span>${A.hasJamendo() ? "Подключён. Скачивание FLAC без потерь." : "Не подключён. Нужен бесплатный Client ID в настройках сервера."}</span></div>
     <div><b>Ваша музыка</b><span>Файлы, которые загружает администратор. Хранятся без перекодирования.</span></div>`;
 }
+async function renderBrain() {
+  const el = $("brain");
+  el.innerHTML = `<h3>Что поняла о вас нейросеть</h3><p class="src">Загружаю…</p>`;
+  let x;
+  try { R.flushEvents(); x = await A.api("/api/rec/explain"); } catch { el.innerHTML = `<h3>Что поняла о вас нейросеть</h3><p class="src">Сервер рекомендаций сейчас не ответил.</p>`; return; }
+  const list = (title, arr) => (arr?.length ? `<div class="bk"><b>${title}</b><span>${arr.map(esc).join(", ")}</span></div>` : "");
+  const pct = Math.round((x.strength || 0) * 100);
+  el.innerHTML = `<h3>Что поняла о вас нейросеть</h3>
+    <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Насколько хорошо волна вас знает"><i style="width:${Math.max(4, pct)}%"></i></div>
+    <p class="src">${x.reactions ? `Учится на ${x.reactions} ваших реакциях: лайки, дослушанные треки, пропуски и «Не то». Знает вас на ${pct}%.` : "Пока ничего: послушайте волну, ставьте лайки и пропускайте лишнее, она учится на каждом треке."}</p>
+    ${list("Ваши исполнители", x.artists)}${list("Похожие, которых она будет предлагать", x.similar)}${list("Жанры", x.genres)}${list("Язык", x.langs)}${list("Эпоха", x.eras)}
+    ${x.nn?.likes?.length ? list(`Нейросеть (обучена на ${x.nn.seen} реакциях) считает, что вам заходит`, x.nn.likes) : ""}
+    ${x.cf ? `<div class="bk"><b>Слушатели с похожим вкусом</b><span>учитываются</span></div>` : ""}`;
+}
 $("themes").onclick = (e) => { const b = e.target.closest(".theme"); if (b) setTheme(+b.dataset.v); };
 $("prefGenres").onclick = (e) => { const b = e.target.closest(".mood"); if (!b) return; const on = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", String(on)); R.seedGenre(b.dataset.g, on); resetPool(); renderPrefs(); };
 $("resetTaste").onclick = (e) => {
   const b = e.currentTarget;
   if (b.dataset.arm !== "1") { b.dataset.arm = "1"; b.textContent = "Точно сбросить?"; setTimeout(() => { b.dataset.arm = ""; b.textContent = "Сбросить вкус"; }, 4000); return; }
-  R.resetProfile(); resetPool(); b.dataset.arm = ""; b.textContent = "Сбросить вкус"; $("resetNote").textContent = "Вкус сброшен. Любимое и плейлисты остались."; renderPrefs();
+  R.resetProfile(); resetPool(); A.api("/api/rec/reset", { method: "POST", body: {} }).catch(() => {}); b.dataset.arm = ""; b.textContent = "Сбросить вкус"; $("resetNote").textContent = "Вкус сброшен. Любимое и плейлисты остались."; renderPrefs();
 };
 
 // ---------------- full-screen player: cover glow, synced lyrics with dust, audio effects ----------------
