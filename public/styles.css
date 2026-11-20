@@ -575,3 +575,26 @@ img{max-width:100%}
 .addpl{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;color:var(--muted);font-size:22px;line-height:1}
 .addpl:hover{color:var(--fg)}
 .srcbadge{font:600 10px/1 var(--font-u);letter-spacing:.06em;margin-left:6px;padding:3px 5px;border-radius:4px;background:var(--card-2);color:var(--muted)}
+
+/* Phones (portrait): logo and login on one row, sections as a full-width row below; nothing runs off the screen */
+@media (max-width:600px){
+  .side{flex-wrap:wrap;overflow:visible;gap:12px}
+  .logo{order:0}
+  .acct{order:1;margin-left:auto;flex-direction:row;align-items:center}
+  .acct .btn{padding:8px 14px;font-size:13px;white-space:nowrap}
+  #acctIn{display:flex;gap:8px;align-items:center;font-size:12px}
+  #acctIn[hidden]{display:none}
+  #acctEmail{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .nav{order:2;width:100%;justify-content:space-between;overflow-x:auto;scrollbar-width:none}
+  .wave-top .wc-btn{margin-left:0}
+  .wave h1{font-size:clamp(52px,17vw,90px)}
+  .wcfg{padding:16px;gap:18px}
+}
+/* Phones turned sideways: the full-screen player goes back to two columns so the cover and lyrics both fit */
+@media (orientation:landscape) and (max-height:540px){
+  .fs-main{grid-template-columns:minmax(0,38vh) minmax(0,1fr);grid-template-rows:none;overflow:hidden;align-items:center}
+  .fs-cover{max-width:min(62vh,320px)}
+  .fs-right{min-height:0;height:70vh}
+  .wave h1{font-size:clamp(48px,11vh,90px)}
+  .shell{padding-top:8px}
+}
