@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icon for Android 5–7 (no adaptive icons there): the same two layers, inset like a launcher would crop them -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

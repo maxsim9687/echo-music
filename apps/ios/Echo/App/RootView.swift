@@ -38,10 +38,10 @@ struct RootView: View {
             Text(t.artist + " — " + t.title)
         }
         .task { await app.boot() }
-        .onChange(of: scenePhase) { _, phase in
+        .onChange(of: scenePhase) { phase in
             if phase == .active { Downloads.shared.reload() }
         }
-        .onChange(of: app.dlTarget) { _, t in
+        .onChange(of: app.dlTarget) { t in
             if let t = t, !t.downloadable {
                 app.dlTarget = nil
                 app.toast("Автор этого трека не разрешил скачивание")

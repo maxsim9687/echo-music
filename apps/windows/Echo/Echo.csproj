@@ -6,7 +6,7 @@
     <RootNamespace>Echo</RootNamespace>
     <AssemblyName>Echo</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x64</Platforms>
+    <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <UseWinUI>true</UseWinUI>
@@ -18,8 +18,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>12.0</LangVersion>
     <ApplicationIcon>Assets\Echo.ico</ApplicationIcon>
-    <Product>Р­С…Рѕ</Product>
-    <AssemblyTitle>Р­С…Рѕ</AssemblyTitle>
+    <Product>Эхо</Product>
+    <AssemblyTitle>Эхо</AssemblyTitle>
     <Company>maxsim.space</Company>
     <Version>1.0.0</Version>
     <DefaultLanguage>ru-RU</DefaultLanguage>

@@ -158,7 +158,7 @@ struct FullPlayerView: View {
             }
             .screenBackground()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         dismiss()
                     } label: {

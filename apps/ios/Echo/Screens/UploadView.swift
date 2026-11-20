@@ -146,7 +146,7 @@ struct UploadView: View {
                 note = "Файл не открылся"
             }
         }
-        .onChange(of: photoItem) { _, item in
+        .onChange(of: photoItem) { item in
             guard let item = item else { return }
             Task { @MainActor in
                 let data = try? await item.loadTransferable(type: Data.self)

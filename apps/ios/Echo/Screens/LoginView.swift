@@ -52,7 +52,7 @@ struct LoginView: View {
                             .padding(14)
                             .background(fieldShape.fill(th.card))
                             .overlay(fieldShape.stroke(th.line, lineWidth: th.border))
-                            .onChange(of: code) { _, v in
+                            .onChange(of: code) { v in
                                 let digits = String(v.filter { $0.isNumber }.prefix(6))
                                 if digits != v { code = digits }
                                 if digits.count == 6 && !busy { submit() }
@@ -85,7 +85,7 @@ struct LoginView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if inSheet {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Закрыть") { dismiss() }.foregroundStyle(th.fg)
                 }
             }

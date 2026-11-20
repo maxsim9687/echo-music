@@ -13,8 +13,9 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        multiDexEnabled = true
         applicationId = "space.maxsim.echo"
-        minSdk = 26
+        minSdk = 21
         targetSdk = 35
         versionCode = (System.getenv("BUILD_NUMBER") ?: "1").toInt()
         versionName = "1.0.${System.getenv("BUILD_NUMBER") ?: "0"}"
@@ -61,6 +62,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

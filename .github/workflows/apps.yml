@@ -28,14 +28,19 @@ jobs:
       - name: Publish
         shell: pwsh
         run: |
-          dotnet publish apps/windows/Echo/Echo.csproj -c Release -r win-x64 -p:Platform=x64 -o out/Echo
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path out/Echo/* -DestinationPath dist/Echo-Windows-x64.zip
+          # x64 for ordinary PCs, ARM64 for Snapdragon / Surface laptops
+          foreach ($a in @(@('win-x64','x64'), @('win-arm64','ARM64'))) {
+            dotnet publish apps/windows/Echo/Echo.csproj -c Release -r $a[0] -p:Platform=$($a[1]) -p:RuntimeIdentifier=$($a[0]) -o "out/$($a[1])"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Compress-Archive -Path "out/$($a[1])/*" -DestinationPath "dist/Echo-Windows-$($a[1].ToLower()).zip"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: dist/Echo-Windows-x64.zip
+          path: |
+            dist/Echo-Windows-x64.zip
+            dist/Echo-Windows-arm64.zip
 
   ios:
     name: iOS (SwiftUI, unsigned IPA)
@@ -145,6 +150,10 @@ jobs:
             FILES="out/windows/Echo-Windows-x64.zip"
             NOTES="Windows: распакуйте Echo-Windows-x64.zip и запустите Echo.exe."
           fi
+          if [ -f out/windows/Echo-Windows-arm64.zip ]; then
+            FILES="$FILES out/windows/Echo-Windows-arm64.zip"
+            NOTES="$NOTES Для ноутбуков на ARM (Snapdragon, Surface): Echo-Windows-arm64.zip."
+          fi
           if [ -f out/android/Echo-Android.apk ]; then
             FILES="$FILES out/android/Echo-Android.apk"
             NOTES="$NOTES Android: установите Echo-Android.apk (разрешите установку из этого источника). Для Android Auto включите «Неизвестные источники» в режиме разработчика Android Auto."
@@ -159,4 +168,5 @@ jobs:
           else
             NOTES="$NOTES Сборка для iPhone в этот раз не получилась, она будет в следующем релизе."
           fi
+          NOTES="$NOTES Инструкции по установке: https://music.maxsim.space/apps"
           gh release create "$TAG" --repo "${{ github.repository }}" --title "Эхо — приложения #${{ github.run_number }}" --notes "$NOTES" $FILES

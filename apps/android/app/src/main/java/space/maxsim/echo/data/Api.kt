@@ -21,6 +21,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -35,11 +41,28 @@ object Api {
     private val cache = ConcurrentHashMap<String, Pair<Long, JsonElement>>()
 
     fun init(ctx: Context) {
+        val tm = trustWithLetsEncrypt(ctx)
+        val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
         http = OkHttpClient.Builder()
+            .sslSocketFactory(ssl.socketFactory, tm)
             .cookieJar(PrefsCookieJar(ctx.getSharedPreferences("echo.cookies", Context.MODE_PRIVATE)))
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(40, TimeUnit.SECONDS)
             .build()
+    }
+
+    /** Android 5–7.0 do not know the Let's Encrypt root, so the site's certificate would be rejected there.
+     *  Trust the system roots plus ISRG Root X1 shipped in the app (public certificate, checked by fingerprint). */
+    private fun trustWithLetsEncrypt(ctx: Context): X509TrustManager {
+        val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null) }
+        val sys = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(null as KeyStore?) }
+        var n = 0
+        sys.trustManagers.filterIsInstance<X509TrustManager>().forEach { m -> m.acceptedIssuers.forEach { ks.setCertificateEntry("sys${n++}", it) } }
+        ctx.resources.openRawResource(space.maxsim.echo.R.raw.isrg_root_x1).use {
+            ks.setCertificateEntry("isrg_x1", CertificateFactory.getInstance("X.509").generateCertificate(it) as X509Certificate)
+        }
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
+        return tmf.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
 
     fun url(path: String): String = when {

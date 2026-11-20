@@ -103,7 +103,7 @@ struct TasteSetupView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if inSheet {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Позже") { dismiss() }.foregroundStyle(th.fg)
                 }
             }
