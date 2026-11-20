@@ -9,8 +9,8 @@
 //   5. listening context: time of day and the current session (two skips of a genre push it down at once);
 //   6. MMR re-ranking for variety plus quotas: familiar vs new, discovery slots, a cap on any single source.
 // Every picked track carries `reason` (shown in the UI) and `via` (which source found it, used for learning).
-import * as A from "./api.js?v=22";
-import * as R from "./recs.js?v=22";
+import * as A from "./api.js?v=24";
+import * as R from "./recs.js?v=24";
 
 const DAY = 86400e3;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -157,7 +157,7 @@ function tagVia(list, via) { for (const t of list) t.via = t.via || via; return 
 const ytCache = {};
 // The public YouTube charts are full of regional film songs, "lyrical" uploads and channel compilations.
 // Keep songs in Latin or Cyrillic script that look like a single track.
-const CATALOG_JUNK = /full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs?\b|in cinemas|official song|official videos|\bfilm\b|movie|kapoor|khan\b|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
+const CATALOG_JUNK = /cantajuego|cocomelon|pinkfong|baby shark|nursery|kids song|for kids|super simple|little baby|детск|для детей|мультик|full video|full song|video song|lyrical|jukebox|#|\bstatus\b|songs? 20\d\d|new .*songs?\b|in cinemas|official song|official videos|\bfilm\b|movie|kapoor|khan\b|haryanvi|bhojpuri|punjabi|bollywood|tollywood|kollywood|telugu|tamil|nonstop|\bmix\b|\b(?:top|best) \d+/i;
 const FOREIGN_SCRIPT = /[؀-ۿऀ-෿฀-๿က-႟]/;
 async function ytCatalog(name) {
   if (ytCache[name] && Date.now() - ytCache[name].at < 3 * 3600e3) return ytCache[name].list;
@@ -249,9 +249,15 @@ async function hitIndex() {
   for (const n of ["daily", "trending", "top"]) {
     try { for (const t of await ytCatalog(n)) { const k = nk(t.artist.split(",")[0]) + "|" + nk(t.title); if (!m.has(k)) m.set(k, t); } } catch {}
   }
+  try {
+    const d = await A.api("/api/hits/matched");
+    for (const [k, v] of Object.entries(d.map || {})) if (!m.has(k)) m.set(k, A.fromYouTubeCatalog({ videoId: v.videoId, artist: v.artist, title: v.title }, "chart"));
+  } catch {}
   hitIdx = m; hitIdxAt = Date.now();
   return m;
 }
+const RU_SPEAKING = new Set(["ru", "by", "kz", "ua", "kg", "uz", "am", "az", "ge", "md", "tj"]);
+const userLang = () => (navigator.language || "ru").slice(0, 2).toLowerCase();
 const userCountry = () => { const p = (navigator.language || "ru-RU").split("-"); return ((p[1] || (p[0] === "ru" ? "ru" : "us")) + "").toLowerCase(); };
 // a chart entry becomes the YouTube Music video of the same song when we know it, otherwise a catalog track that is
 // matched to a full version (YouTube, Audius, uploads) when it starts
@@ -260,13 +266,19 @@ function chartTrack(it, src, idx, ytOn) {
   if (y) return { ...y, via: src, extLink: it.link, extName: A.CATALOG_NAME[src], plays: Math.max(y.plays || 0, it.popularity || 0) };
   const t = A.fromCatalog(it, src);
   t.via = src;
+  t.unmatched = true; // no known original yet: kept out of the wave (it would play as a cover)
   if (src === "spotify" && it.id) t.cover = t.coverSm = `/api/sp/cover/${it.id}`;
   return t;
 }
 async function spotifyHits(ytOn) {
   const idx = await hitIndex();
   const ids = ["global"];
-  try { const cs = await A.api("/api/charts"); const cc = userCountry(); if (cs.charts?.some((c) => c.id === cc)) ids.push(cc); } catch {}
+  try {
+    const cs = await A.api("/api/charts"), cc = userCountry();
+    // Russian-speaking listeners: Spotify has no Russian chart, Kazakhstan and Belarus are the closest
+    const near = RU_SPEAKING.has(cc) ? ["kz", "by", cc] : [cc];
+    for (const c of near) if (cs.charts?.some((x) => x.id === c) && !ids.includes(c)) ids.push(c);
+  } catch {}
   const out = [];
   for (const id of ids) {
     try {
@@ -322,9 +334,9 @@ export function sources(mood, cfg = {}) {
   if (pre && cfg.yt !== false && !cfg.onlyDl && A.hasYouTube()) {
     for (const p of moodYouTube(mood, pre)) add(p, "youtube");
   } else if (cfg.yt !== false && !cfg.onlyDl) {
-    add(ytCatalog("daily"), "youtube");
-    if (Math.random() < 0.7) add(ytCatalog("trending"), "youtube");
-    if (Math.random() < 0.5) add(ytCatalog("top"), "youtube");
+    if (Math.random() < 0.6) add(ytCatalog("daily"), "youtube");
+    if (Math.random() < 0.6) add(ytCatalog("trending"), "youtube");
+    if (Math.random() < 0.2) add(ytCatalog("top"), "youtube");
   }
   if (!cfg.onlyDl && !pre) {
     if (cfg.sp !== false) add(spotifyHits(cfg.yt !== false), "spotify");
@@ -334,7 +346,8 @@ export function sources(mood, cfg = {}) {
     const tags = (pre?.tags || (pre ? pre.genres : topG).map(A.jTag)).filter(Boolean).slice(0, 3).join("+");
     add(A.jaPopular({ tags: tags || undefined, limit: 40, offset: pickOne([0, 0, 40, 80]), order: pickOne(["popularity_week", "popularity_month", "releasedate"]), instrumental: cfg.vocals === "instrumental" }), "jamendo");
   }
-  add(A.localTracks(), "uploads");
+  // the site's uploads join the wave only for listeners who like those artists, not for everyone
+  add(A.localTracks().then((l) => l.filter((t) => R.P.likes[t.id] || (R.P.a[t.artistId] || 0) > 0.5)), "uploads");
   if ((cfg.novelty ?? 50) < 60) jobs.push(Promise.resolve(tagVia(Object.values(R.P.likes).map((t) => A.refresh({ ...t })), "liked")));
   return jobs;
 }
@@ -345,6 +358,7 @@ const NOVEL_VIA = new Set(["explore", "underground", "youtube", "charts"]);
 
 export function score(t, ctx = {}) {
   if (R.P.ban[t.id] || (t.artistId && R.P.banA[t.artistId])) return { s: -1e9 };
+  if (t.unmatched && !(ctx.cfg && ctx.cfg.yt === false)) return { s: -1e9 };
   const cfg = { ...R.WAVE_DEFAULTS, ...(ctx.cfg || {}) };
   if (cfg.onlyDl && !t.downloadable) return { s: -1e9 };
   if (cfg.yt === false && t.src === "youtube") return { s: -1e9 };
@@ -433,7 +447,16 @@ export function score(t, ctx = {}) {
     if (pl.bpm_min && t.bpm) s += t.bpm >= pl.bpm_min && t.bpm <= (pl.bpm_max || 999) ? 2.5 : -2.5;
     if (pl.instrumental && t.instrumental) s += 2;
   }
-  if (t.via === "uploads") { s += 1.5; why.push(["upload", 2.8]); }
+
+
+  // 9b. region: until the wave knows the listener, songs of their own country and language come first
+  const known = Object.keys(R.P.likes).length + R.P.hist.length;
+  const ruUser = userLang() === "ru" || RU_SPEAKING.has(userCountry());
+  const cyr = /[а-яё]/i.test(`${t.title} ${t.artist}`);
+  const cold = known < 15 ? 1 : 0.4;
+  if (ruUser && cyr) s += 2.2 * cold;
+  if (t.via === "apple" || t.via === "spotify") s += 1.2 * cold; // current charts beat old YouTube favourites
+  if ((t.tags || []).includes("classic hit")) s -= 1.5 * cold;
 
   // 10. repetition control
   s -= servedPenalty(t);

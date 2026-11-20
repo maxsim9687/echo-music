@@ -418,7 +418,7 @@ def apple_top(cc="ru"):
     cc = cc if re.fullmatch(r"[a-z]{2}", cc or "") else "ru"
     last = None
     for c in dict.fromkeys([cc, "ru"]):
-        if time.time() - _apple_bad.get(c, 0) < 6 * 3600:
+        if time.time() - _apple_bad.get(c, 0) < 600:
             continue  # this storefront did not answer recently: do not make the listener wait for it again
         try:
             url = f"https://rss.marketingtools.apple.com/api/v2/{c}/music/most-played/100/songs.json"
@@ -427,7 +427,7 @@ def apple_top(cc="ru"):
             if hit and time.time() - hit[0] < 6 * 3600:
                 data = hit[1]
             else:
-                with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, "Accept": "application/json"}), timeout=6) as r:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, "Accept": "application/json"}), timeout=10) as r:
                     data = json.loads(r.read(4_000_000))
                 with _cache_lock:
                     _cache[url] = (time.time(), data)
@@ -529,6 +529,89 @@ def warm_loop():
                 print("warm failed:", route, params.get("query") or params.get("genre") or "", type(e).__name__, flush=True)
             time.sleep(0.5)
         time.sleep(15 * 60)
+
+
+# ---------- chart songs → their YouTube video, found in the background ----------
+# The wave takes hits from the Spotify and Apple Music charts. To play the original (not a cover) each song needs
+# its YouTube video id. The server looks them up slowly in the background (at most 50 searches a day, the rest of
+# the free quota stays for listeners) and keeps them; the page gets the whole map in one request.
+_matched = {"map": {}, "at": 0}
+
+
+def hit_key(artist, title):
+    def nk(s):
+        s = re.sub(r"\(.*?\)|\[.*?\]", " ", (s or "").lower())
+        s = re.sub(r"feat\.?.*$|ft\..*$", " ", s)
+        return re.sub(r"[^a-z0-9а-яё]+", " ", s).strip()
+    return nk((artist or "").split(",")[0]) + "|" + nk(title)
+
+
+def _pick_video(items, artist):
+    a = hit_key(artist, "x").split("|")[0]
+    for v in items:
+        text = hit_key(v.get("channel", "") + " " + v.get("title", ""), "x").split("|")[0]
+        if a and a.split(" ")[0] in text and not re.search(r"cover|karaoke|remix|sped up|slowed|nightcore|8d audio|reaction|lyrics? video", v.get("title", ""), re.I):
+            return v
+    return None
+
+
+def hits_loop():
+    time.sleep(20)
+    while True:
+        try:
+            entries = []  # Russian chart first: most listeners are there, it has the fewest songs in the YouTube lists
+            for src, cc in (("apple", "ru"), ("spotify", "global"), ("spotify", "kz"), ("apple", "us")):
+                try:
+                    items = apple_top(cc).get("data", []) if src == "apple" else spotify_chart(cc).get("items", [])
+                    entries += [(i["artist"], i["title"]) for i in items[:100]]
+                except Exception as e:
+                    print("hits:", src, cc, type(e).__name__, flush=True)
+            known = {}
+            for name in YT_LISTS:
+                try:
+                    for v in yt_list(name):
+                        known.setdefault(hit_key(v.get("artist"), v.get("title")), v)
+                except Exception:
+                    pass
+            m = dict(_matched["map"])
+            stop = False  # once Google says no, only already-cached searches are used this pass
+            for artist, title in entries:
+                k = hit_key(artist, title)
+                if k in m:
+                    continue
+                if k in known:
+                    v = known[k]
+                    m[k] = {"videoId": v["videoId"], "artist": artist, "title": title}
+                    continue
+                if not CFG["youtube"]:
+                    continue
+                q = f"{artist.split(',')[0]} {title}"
+                with db() as con:
+                    cached = con.execute("SELECT 1 FROM yt_cache WHERE q=?", ("v2:" + q.lower().strip()[:120],)).fetchone()
+                if not cached and (stop or limited("yt:bg", 50, 86400)):
+                    continue  # today's background budget is spent; the rest tomorrow
+                try:
+                    v = _pick_video(yt_search(q), artist)
+                except RuntimeError:
+                    stop = True  # the shared daily quota is used up
+                    continue
+                except urllib.error.HTTPError as e:
+                    print("hits: search paused, HTTP", e.code, flush=True)
+                    stop = True  # Google says slow down or no quota: new searches again in an hour
+                    continue
+                except Exception as e:
+                    print("hits: search", type(e).__name__, flush=True)
+                    time.sleep(2)
+                    continue
+                if v:
+                    m[k] = {"videoId": v["videoId"], "artist": artist, "title": title}
+                if not cached:
+                    time.sleep(3)
+            _matched.update(map=m, at=time.time())
+            print("hits: matched", len(m), "of", len(entries), flush=True)
+        except Exception as e:
+            print("hits loop:", type(e).__name__, e, flush=True)
+        time.sleep(3600)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -1210,6 +1293,8 @@ class Handler(BaseHTTPRequestHandler):
             except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
                 print(m.group(1), "search error:", type(e).__name__, e, flush=True)
                 return self.err(504, ("Apple Music" if m.group(1) == "apple" else "Spotify") + " не ответил")
+        if path == "/api/hits/matched":
+            return self.send_json({"map": _matched["map"], "at": int(_matched["at"])})
         if path == "/api/apple/top":
             cc = (urllib.parse.parse_qs(parsed.query).get("cc") or ["ru"])[0].strip()
             try:
@@ -1581,6 +1666,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=warm_loop, daemon=True).start()
+    threading.Thread(target=hits_loop, daemon=True).start()
     srv = ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), CFG["port"]), Handler)
     print(f"Эхо запущено: http://localhost:{CFG['port']}  (админы: {len(CFG['admins'])}, почта: {'да' if CFG['smtp_host'] else 'нет'})")
     srv.serve_forever()

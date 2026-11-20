@@ -1,8 +1,8 @@
-import * as A from "./api.js?v=22";
-import * as R from "./recs.js?v=22";
-import { createFx } from "./fx.js?v=22";
-import { downloadOptions, download } from "./download.js?v=22";
-import * as E from "./engine.js?v=22";
+import * as A from "./api.js?v=24";
+import * as R from "./recs.js?v=24";
+import { createFx } from "./fx.js?v=24";
+import { downloadOptions, download } from "./download.js?v=24";
+import * as E from "./engine.js?v=24";
 
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement;
@@ -198,8 +198,9 @@ async function altVersion(t) {
   try { consider(await A.auSearch(`${artist} ${t.title}`.trim(), { limit: 15 })); } catch {}
   if (bestS < 3 && A.hasJamendo()) { try { consider(await A.jaSearch(`${artist} ${t.title}`.trim(), 10)); } catch {} }
   if (!best || bestS < 3) return null;
-  const orig = na && nkey(best.artist) === na;
-  return { ...best, reason: orig ? t.reason : "другая версия: YouTube недоступен", extLink: keep.extLink, extName: keep.extName };
+  const orig = na && (nkey(best.artist) === na || nkey(best.artist).includes(na));
+  if (!orig || /remix|cover|кавер|sped|slowed|nightcore|karaoke|instrumental/i.test(best.title)) return null; // a remix or cover is not the same song
+  return { ...best, reason: t.reason, extLink: keep.extLink, extName: keep.extName };
 }
 // Apple Music / Spotify result → a playable full version, cached per track.
 const resolved = new Map();
@@ -209,6 +210,9 @@ async function resolveCatalog(t) {
     let m = null;
     if (!ytBroken) { try { m = await matchImported({ artist: t.artist, title: t.title, duration: t.duration }, await A.localTracks()); } catch {} }
     let r = m?.t || null;
+    if (m?.kind === "version" && A.hasYouTube() && !ytBroken) {
+      try { const vids = await A.ytSearch(`${(t.artist || "").split(",")[0]} ${t.title}`); if (vids[0]) r = A.fromYouTube(vids[0], { title: t.title, artist: t.artist }); } catch {}
+    }
     if (!r || (r.src === "youtube" && ytBroken)) r = await altVersion(t);
     if (!r) return null;
     const out = { ...r, extLink: t.link, extName: t.extName, via: t.src };
