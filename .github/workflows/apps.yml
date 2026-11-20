@@ -106,10 +106,8 @@ jobs:
           # With the repository's own key updates install over the old version; without it the build uses a
           # temporary debug key (works, but each update needs the old app removed first).
           if [ -n "$KEYSTORE_B64" ]; then
-            printf '%s' "$KEYSTORE_B64" | tr -d '
- ' | base64 -d > "$RUNNER_TEMP/release.p12"
-            PASS=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '
-')
+            printf '%s' "$KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > "$RUNNER_TEMP/release.p12"
+            PASS=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n')
             echo "::add-mask::$PASS"
             echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
             echo "ANDROID_KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
