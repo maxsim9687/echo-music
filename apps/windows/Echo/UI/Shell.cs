@@ -77,6 +77,7 @@ public sealed class Shell : Window
             centerTimer.Stop();
             Settings.Save(); Api.SaveCookies();
             spots.Shutdown();
+            Updater.Apply(restart: false); // a downloaded update is installed as the app closes
         };
 
         ApplyTheme();

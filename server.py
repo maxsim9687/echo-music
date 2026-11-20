@@ -18,6 +18,7 @@ import ssl
 import threading
 import time
 import urllib.parse
+import urllib.request
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -518,6 +519,87 @@ WARM += [("tracks/search", {"query": q, "limit": "25"}) for q in
          ("energy", "workout", "chill", "calm", "lofi study", "focus", "night", "late night", "sad", "melancholy")]
 WARM += [("tracks/trending", {"time": "week", "genre": g, "limit": "30"}) for g in
          ("Electronic", "Hip-Hop/Rap", "Lo-Fi", "House", "Trap", "Ambient", "Drum & Bass", "Techno", "Deep House", "Pop", "Rock", "Alternative")]
+
+
+# ---- apps: the site serves the app files itself, mirrored from the GitHub releases ----
+APPS_DIR = DATA / "apps"
+APPS_REPO = "maxsim9687/echo-music"
+APP_FILES = {
+    # short name -> (file, content type)
+    "android": ("Echo-Android.apk", "application/vnd.android.package-archive"),
+    "windows": ("Echo-Windows-x64.zip", "application/zip"),
+    "windows-arm": ("Echo-Windows-arm64.zip", "application/zip"),
+    "ios": ("Echo.ipa", "application/octet-stream"),
+    "trollstore": ("Echo-TrollStore.tipa", "application/octet-stream"),
+}
+_apps_lock = threading.Lock()
+
+
+def apps_manifest():
+    try:
+        return json.loads((APPS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def apps_sync():
+    """Download each app file from the newest GitHub release that has it, if it is newer than our copy."""
+    APPS_DIR.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(f"https://api.github.com/repos/{APPS_REPO}/releases?per_page=15",
+                                 headers={**UA, "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        releases = json.loads(r.read().decode("utf-8"))
+    with _apps_lock:
+        man = apps_manifest()
+        for key, (name, _ct) in APP_FILES.items():
+            hit = None
+            for rel in releases:
+                if rel.get("draft") or rel.get("prerelease"):
+                    continue
+                for a in rel.get("assets") or []:
+                    if a.get("name") == name and a.get("state") == "uploaded":
+                        hit = (rel, a)
+                        break
+                if hit:
+                    break
+            if not hit:
+                continue
+            rel, a = hit
+            dest = APPS_DIR / name
+            old = man.get(key) or {}
+            if old.get("tag") == rel["tag_name"] and dest.is_file() and dest.stat().st_size == a["size"]:
+                continue
+            tmp = APPS_DIR / (name + ".part")
+            h = hashlib.sha256()
+            got = 0
+            with urllib.request.urlopen(urllib.request.Request(a["browser_download_url"], headers=UA), timeout=60) as r, open(tmp, "wb") as f:
+                while True:
+                    chunk = r.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+            if got != a["size"]:
+                tmp.unlink(missing_ok=True)
+                print("apps: size mismatch for", name, flush=True)
+                continue
+            os.replace(tmp, dest)
+            man[key] = {"file": name, "tag": rel["tag_name"], "size": got, "sha256": h.hexdigest(),
+                        "date": rel.get("published_at") or "", "github": a["browser_download_url"]}
+            print("apps: mirrored", name, rel["tag_name"], got, flush=True)
+        (APPS_DIR / "manifest.json.tmp").write_text(json.dumps(man, ensure_ascii=False), encoding="utf-8")
+        os.replace(APPS_DIR / "manifest.json.tmp", APPS_DIR / "manifest.json")
+
+
+def apps_loop():
+    time.sleep(20)
+    while True:
+        try:
+            apps_sync()
+        except Exception as e:  # network trouble: keep serving what we have
+            print("apps sync error:", type(e).__name__, e, flush=True)
+        time.sleep(1800)
 
 
 def warm_loop():
@@ -1312,6 +1394,21 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path.startswith(("/api/au/", "/api/ja/")):
             return self.catalog(path, parsed.query)
+        if path == "/api/apps":
+            man = apps_manifest()
+            return self.send_json({k: {kk: v[kk] for kk in ("file", "tag", "size", "sha256", "date")} for k, v in man.items()})
+        m = re.fullmatch(r"/dl/(android|windows|windows-arm|ios|trollstore)", path)
+        if m:
+            name, ctype = APP_FILES[m.group(1)]
+            if (APPS_DIR / name).is_file():
+                return self.send_file(APPS_DIR / name, ctype, download_name=name, cache="public, max-age=600")
+            self.send_response(302)  # not mirrored yet: the same file on GitHub
+            self.send_header("Location", f"https://github.com/{APPS_REPO}/releases/latest/download/{name}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path in ("/apps", "/app", "/download"):
+            return self.send_file(PUBLIC / "apps.html", "text/html; charset=utf-8", cache="no-cache")
         if path == "/api/yt/catalog":
             name = (urllib.parse.parse_qs(parsed.query).get("list") or ["daily"])[0]
             if name not in YT_LISTS:
@@ -1789,6 +1886,7 @@ if __name__ == "__main__":
     threading.Thread(target=warm_loop, daemon=True).start()
     threading.Thread(target=hits_loop, daemon=True).start()
     threading.Thread(target=meta_loop, daemon=True).start()
+    threading.Thread(target=apps_loop, daemon=True).start()
     recsys.init(db=db, hit_key=hit_key, yt_list=yt_list, yt_lists=lambda: list(YT_LISTS),
                 matched=lambda: _matched["map"], ua=UA)
     srv = ThreadingHTTPServer((os.environ.get("HOST", "127.0.0.1"), CFG["port"]), Handler)

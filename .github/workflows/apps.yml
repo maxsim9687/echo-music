@@ -31,7 +31,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           # x64 for ordinary PCs, ARM64 for Snapdragon / Surface laptops
           foreach ($a in @(@('win-x64','x64'), @('win-arm64','ARM64'))) {
-            dotnet publish apps/windows/Echo/Echo.csproj -c Release -r $a[0] -p:Platform=$($a[1]) -p:RuntimeIdentifier=$($a[0]) -o "out/$($a[1])"
+            dotnet publish apps/windows/Echo/Echo.csproj -c Release -r $a[0] -p:Platform=$($a[1]) -p:RuntimeIdentifier=$($a[0]) -p:Version=1.0.${{ github.run_number }} -o "out/$($a[1])"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             Compress-Archive -Path "out/$($a[1])/*" -DestinationPath "dist/Echo-Windows-$($a[1].ToLower()).zip"
           }
@@ -62,7 +62,8 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project Echo.xcodeproj -scheme Echo -configuration Release -sdk iphoneos \
-            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} MARKETING_VERSION=1.0.${{ github.run_number }} build \
             | tee build.log | grep -E "error:|warning: unre|BUILD (SUCCEEDED|FAILED)" || true
           test -d build/Build/Products/Release-iphoneos/Echo.app
       - name: Show errors

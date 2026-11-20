@@ -88,6 +88,19 @@ public sealed class SettingsPage : PageBase
         dl.Children.Add(U.H(0, U.Pill("Открыть папку", () => Downloads.OpenFolder(), glyph: Glyph.Folder)));
         Body.Children.Add(U.Section("Скачивание", (string?)null, dl));
 
+        // updates
+        var up = new StackPanel { Spacing = 10 };
+        up.Children.Add(U.Muted($"Версия 1.0.{Updater.Current}. Новые версии скачиваются сами и ставятся при закрытии приложения.", 14, true));
+
+        var check = U.Pill(Updater.ReadyBuild > 0 ? $"Перезапустить с версией 1.0.{Updater.ReadyBuild}" : "Проверить обновления", async () =>
+        {
+            if (Updater.ReadyBuild > 0) { Updater.Apply(restart: true); Shell.Main.Close(); return; }
+            Toasts.Show("Проверяю обновления…", ms: 2000);
+            if (await Updater.Check() == 0) Toasts.Show("У вас последняя версия");
+        });
+        up.Children.Add(U.H(0, check));
+        Body.Children.Add(U.Section("Обновления", (string?)null, up));
+
         RenderTaste();
     }
 

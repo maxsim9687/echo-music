@@ -351,5 +351,21 @@ fun ProfileScreen() {
                 )
             }
         }
+        item {
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            val ready by space.maxsim.echo.data.Updater.ready.collectAsState()
+            var state by remember { mutableStateOf<String?>(null) }
+            Column(Modifier.padding(16.dp).fillMaxWidth().glass().padding(20.dp)) {
+                Text("Обновления", color = C.fg, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Gap(6.dp)
+                Text("Версия 1.0.${space.maxsim.echo.data.Updater.currentBuild(ctx)}. Новые версии скачиваются сами, установка — одним нажатием.", color = C.muted, fontSize = 13.sp)
+                Gap(12.dp)
+                if (ready != null) Pill("Установить 1.0.${ready!!.build}", true) { space.maxsim.echo.data.Updater.install(ctx) }
+                else Pill(state ?: "Проверить обновления", false) {
+                    state = "Проверяю…"
+                    scope.launch { state = if (space.maxsim.echo.data.Updater.check(ctx.applicationContext) == null) "У вас последняя версия" else null }
+                }
+            }
+        }
     }
 }

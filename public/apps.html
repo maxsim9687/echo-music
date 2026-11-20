@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Эхо — приложения</title>
+<meta name="description" content="Скачать Эхо для Windows, Android и iPhone: Android Auto и CarPlay, автообновление, пошаговые инструкции.">
+<meta name="theme-color" content="#050505">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=Unbounded:wght@500;800&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+:root{--bg:#050505;--fg:#f2f2f2;--muted:#8a8a8a;--line:#232323;--card:#0e0e0e;--card2:#161616;--r:22px;
+  --fd:"Unbounded",system-ui,sans-serif;--fb:"Inter",system-ui,sans-serif;--fm:"JetBrains Mono",ui-monospace,monospace}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--fb);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+header.top{position:sticky;top:0;z-index:20;background:rgba(5,5,5,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+header.top .wrap{display:flex;align-items:center;gap:16px;height:64px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font:800 18px var(--fd);letter-spacing:.02em}
+.mark{width:26px;height:26px;border-radius:50%;border:2px solid var(--fg);position:relative;flex:none}
+.mark::after{content:"";position:absolute;inset:7px;border-radius:50%;background:var(--fg)}
+.top nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.top nav a{text-decoration:none;color:var(--muted);font-size:14px;padding:8px 12px;border-radius:999px}
+.top nav a:hover{color:var(--fg);background:var(--card2)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:48px;padding:0 22px;border-radius:999px;border:1px solid var(--fg);
+  background:var(--fg);color:var(--bg);font:600 15px var(--fb);text-decoration:none;cursor:pointer;transition:transform .15s,opacity .15s;white-space:nowrap}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:none;opacity:.85}
+.btn.ghost{background:transparent;color:var(--fg);border-color:var(--line)}
+.btn.ghost:hover{border-color:var(--fg)}
+.btn svg{width:18px;height:18px;flex:none}
+.hero{padding:72px 0 40px;position:relative}
+.hero h1{font:800 clamp(38px,7vw,84px)/1.02 var(--fd);letter-spacing:-.02em;margin:0 0 18px;max-width:14ch}
+.hero p.lead{color:var(--muted);font-size:clamp(16px,2vw,19px);max-width:60ch;margin:0}
+.rings{position:absolute;right:-120px;top:10px;width:520px;height:520px;pointer-events:none;opacity:.55}
+.rings span{position:absolute;inset:0;border:1px solid var(--line);border-radius:50%;animation:pulse 6s ease-in-out infinite}
+.rings span:nth-child(2){inset:70px;animation-delay:.6s}.rings span:nth-child(3){inset:140px;animation-delay:1.2s}.rings span:nth-child(4){inset:210px;background:var(--fg);opacity:.08}
+@keyframes pulse{50%{transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){.rings span{animation:none}html{scroll-behavior:auto}}
+.pick{margin-top:36px;display:flex;flex-wrap:wrap;align-items:center;gap:14px 22px;padding:22px;border:1px solid var(--line);border-radius:var(--r);background:var(--card);max-width:760px;position:relative}
+.pick .who{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em}
+.pick .what{font:500 20px var(--fd);margin-top:2px}
+.pick .meta{font-size:13px;color:var(--muted)}
+.pick .grow{flex:1;min-width:200px}
+.facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.chip{display:inline-flex;align-items:center;gap:8px;font-size:13px;padding:7px 12px;border:1px solid var(--line);border-radius:999px;color:var(--muted)}
+.chip b{color:var(--fg);font-weight:600}
+section{padding:56px 0;border-top:1px solid var(--line)}
+h2{font:800 clamp(26px,4vw,40px)/1.1 var(--fd);margin:0 0 10px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 28px;max-width:62ch}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px}
+.card{border:1px solid var(--line);border-radius:var(--r);background:var(--card);padding:26px;display:flex;flex-direction:column;gap:14px;position:relative;overflow:hidden;min-width:0}
+.card.me{border-color:var(--fg)}
+.card .tag{position:absolute;top:18px;right:18px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;background:var(--fg);color:var(--bg);padding:4px 10px;border-radius:999px;display:none}
+.card.me .tag{display:block}
+.card .ico{width:48px;height:48px;border-radius:14px;background:var(--card2);display:flex;align-items:center;justify-content:center}
+.card .ico svg{width:26px;height:26px}
+.card h3{font:500 22px var(--fd);margin:0}
+.card p{margin:0;color:var(--muted);font-size:15px}
+.card .req{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px;margin-top:auto}
+.card .req b{color:var(--fg);font-weight:600}
+.dl{display:flex;flex-direction:column;gap:8px}
+.dl .btn{width:100%}
+.dl small{color:var(--muted);font-size:12px;text-align:center}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 26px;padding:6px;border:1px solid var(--line);border-radius:999px;width:max-content;max-width:100%}
+.tabs button{all:unset;cursor:pointer;padding:10px 18px;border-radius:999px;font-size:14px;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--fg);color:var(--bg);font-weight:600}
+.tabs button:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+.guide[hidden]{display:none}
+.guide-head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:22px}
+.guide-head h3{font:500 24px var(--fd);margin:0}
+ol.steps{list-style:none;margin:0;padding:0;counter-reset:s;display:grid;gap:12px}
+ol.steps>li{counter-increment:s;display:grid;grid-template-columns:52px 1fr;gap:16px;padding:20px;border:1px solid var(--line);border-radius:18px;background:var(--card)}
+ol.steps>li::before{content:counter(s);font:800 22px var(--fd);width:52px;height:52px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+ol.steps b.t{display:block;font-weight:600;font-size:17px;margin-bottom:4px}
+ol.steps p{margin:0;color:var(--muted);font-size:15px}
+ol.steps p+p{margin-top:6px}
+kbd,.path{font:13px var(--fm);background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;color:var(--fg);white-space:nowrap}
+.note{margin-top:16px;padding:16px 18px;border-radius:16px;background:var(--card2);color:var(--muted);font-size:14px}
+.note b{color:var(--fg)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px;margin-top:16px}
+.opt{border:1px solid var(--line);border-radius:18px;padding:20px;background:var(--card)}
+.opt h4{margin:0 0 6px;font:500 18px var(--fd)}
+.opt p{margin:0 0 12px;color:var(--muted);font-size:14px}
+.opt ol{margin:0;padding-left:20px;color:var(--muted);font-size:14px;display:grid;gap:6px}
+.opt ol b{color:var(--fg);font-weight:600}
+.car{background:#000;border:1px solid var(--line);border-radius:20px;padding:12px;display:flex;gap:12px;color:#fff;font-family:-apple-system,"SF Pro Text",var(--fb);min-height:300px;max-width:820px}
+.car .dock{width:58px;display:flex;flex-direction:column;align-items:center;gap:12px;padding:6px 0;font-size:12px;color:#ddd;flex:none}
+.car .ap{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center}
+.car .ap svg{width:20px;height:20px}
+.car .scr{flex:1;background:#1c1c1e;border-radius:12px;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.car .ttl{padding:12px 18px 6px;font-size:17px;font-weight:600}
+.car .lst{flex:1;padding:0 10px}
+.car .it{display:flex;align-items:center;gap:12px;padding:7px 8px;border-radius:9px}
+.car .it.on{background:#2c2c2e}
+.car .it svg{width:20px;height:20px;flex:none}
+.car .it b{display:block;font-weight:400;font-size:15px}
+.car .it small{display:block;color:#8e8e93;font-size:12px}
+.car .hdr{color:#8e8e93;font-size:12px;padding:6px 8px 2px}
+.car .bar{display:flex;border-top:1px solid #38383a}
+.car .bar div{flex:1;text-align:center;padding:6px 0 8px;font-size:11px;color:#8e8e93}
+.car .bar div.on{color:#0a84ff}
+.car .bar svg{display:block;margin:0 auto 2px;width:20px;height:20px}
+.cars{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:16px}
+.cap{color:var(--muted);font-size:13px;margin:10px 4px 0}
+.upd{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:16px}
+.upd .card h3{font-size:18px}
+.state{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600}
+.state i{width:8px;height:8px;border-radius:50%;background:var(--fg)}
+.state.off i{background:transparent;border:1px solid var(--muted)}
+details{border:1px solid var(--line);border-radius:16px;background:var(--card);padding:0 20px;margin-bottom:10px}
+summary{cursor:pointer;list-style:none;padding:18px 0;font-weight:600;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font:500 20px var(--fd);color:var(--muted)}
+details[open] summary::after{content:"−"}
+details p{margin:0 0 18px;color:var(--muted);font-size:15px}
+.sums{display:grid;gap:8px}
+.sum{display:grid;grid-template-columns:minmax(0,200px) minmax(0,1fr);gap:12px;align-items:center;font-size:13px;padding:12px 16px;border:1px solid var(--line);border-radius:12px}
+.sum code{font:12px var(--fm);color:var(--muted);overflow-wrap:anywhere}
+footer{border-top:1px solid var(--line);padding:36px 0 60px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:12px 24px;justify-content:space-between}
+@media (max-width:700px){
+  .wrap{padding:0 16px}
+  .top nav{display:none}
+  .hero{padding:44px 0 28px}
+  .rings{width:340px;height:340px;right:-170px;top:0}
+  .pick{padding:18px}
+  .pick .btn{width:100%}
+  section{padding:44px 0}
+  .card{padding:20px}
+  ol.steps>li{grid-template-columns:40px 1fr;gap:12px;padding:16px}
+  ol.steps>li::before{width:40px;height:40px;font-size:17px}
+  .tabs{border-radius:18px;width:100%}
+  .tabs button{flex:1;text-align:center;padding:10px 8px}
+  .car{min-height:0;gap:8px;padding:8px}
+  .car .dock{width:44px}
+  .car .ap{width:32px;height:32px}
+  .sum{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5 10.5 4.4v7.1H3zm8.5-1.2L21 3v8.5h-9.5zM3 12.5h7.5v7.1L3 18.5zm8.5 0H21V21l-9.5-1.3z"/></symbol>
+  <symbol id="i-and" viewBox="0 0 24 24" fill="currentColor"><path d="M7.2 9h9.6c.7 0 1.2.5 1.2 1.2V17c0 .7-.5 1.2-1.2 1.2H16v2.3a1.2 1.2 0 0 1-2.4 0v-2.3h-3.2v2.3a1.2 1.2 0 0 1-2.4 0v-2.3h-.8c-.7 0-1.2-.5-1.2-1.2v-6.8C6 9.5 6.5 9 7.2 9zM4 9.6a1.2 1.2 0 0 1 2.4 0v5.2a1.2 1.2 0 0 1-2.4 0zm13.6 0a1.2 1.2 0 0 1 2.4 0v5.2a1.2 1.2 0 0 1-2.4 0zM8.3 3.6l-.9-1.4.6-.4 1 1.5A6.3 6.3 0 0 1 12 2.7c1.1 0 2.1.2 3 .6l1-1.5.6.4-.9 1.4A5.2 5.2 0 0 1 18 8H6a5.2 5.2 0 0 1 2.3-4.4zM9.5 5.2a.7.7 0 1 0 0 1.4.7.7 0 0 0 0-1.4zm5 0a.7.7 0 1 0 0 1.4.7.7 0 0 0 0-1.4z"/></symbol>
+  <symbol id="i-ios" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 18.5h3"/></symbol>
+  <symbol id="i-car" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 16.5V12l1.8-5A2 2 0 0 1 8.7 5.6h6.6A2 2 0 0 1 17.2 7L19 12v4.5M5 16.5h14M5 16.5V19m14-2.5V19M5 12h14"/><circle cx="8" cy="14.3" r=".6" fill="currentColor"/><circle cx="16" cy="14.3" r=".6" fill="currentColor"/></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24" fill="currentColor"><path d="M12 20.5s-7.5-4.6-9.2-9.3C1.6 7.8 3.9 4.5 7.3 4.5c2 0 3.6 1.1 4.7 2.7 1.1-1.6 2.7-2.7 4.7-2.7 3.4 0 5.7 3.3 4.5 6.7-1.7 4.7-9.2 9.3-9.2 9.3z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h11M4 11h11M4 16h7"/><circle cx="17.5" cy="17" r="2.5"/><path d="M20 17V8l2-.5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v8m-3.5-3.5L12 15.5l3.5-3.5"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 3.5h2.6l1.4 4.2-2 1.4a12 12 0 0 0 6.3 6.3l1.4-2 4.2 1.4v2.6a1.8 1.8 0 0 1-1.9 1.8A16.6 16.6 0 0 1 4.8 5.4a1.8 1.8 0 0 1 1.8-1.9z"/></symbol>
+  <symbol id="i-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-6.5-6-6.5-11A6.5 6.5 0 0 1 18.5 10c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.3-4.5L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.5l1.7-2M20 20v-4.5h-4.5"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>Эхо</a>
+    <nav aria-label="Разделы страницы">
+      <a href="#get">Скачать</a>
+      <a href="#guide">Как установить</a>
+      <a href="#car">В машине</a>
+      <a href="#updates">Обновления</a>
+      <a href="#faq">Вопросы</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div class="rings" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <h1>Эхо на&nbsp;всех устройствах</h1>
+    <p class="lead">«Моя волна», чарты, плейлисты и скачанные треки — в приложениях для Windows, Android и iPhone, а ещё в Android Auto и CarPlay. Всё бесплатно, без рекламы, с одним аккаунтом на всех устройствах.</p>
+    <div class="pick" id="pick">
+      <div class="grow">
+        <div class="who" id="pickWho">Для вашего устройства</div>
+        <div class="what" id="pickWhat">Выберите приложение ниже</div>
+        <div class="meta" id="pickMeta"></div>
+      </div>
+      <a class="btn" id="pickBtn" href="#get"><svg><use href="#i-dl"/></svg><span>Скачать</span></a>
+    </div>
+    <div class="facts">
+      <span class="chip"><b>Бесплатно</b> и без рекламы</span>
+      <span class="chip">Файлы с <b>music.maxsim.space</b></span>
+      <span class="chip"><b>Автообновление</b> на Android и Windows</span>
+      <span class="chip">Открытый код, <b>MIT</b></span>
+    </div>
+  </div>
+
+  <section id="get">
+    <div class="wrap">
+      <h2>Скачать</h2>
+      <p class="sub">Файлы отдаёт сам сайт, проверка подлинности — по SHA-256 внизу страницы.</p>
+      <div class="grid">
+        <article class="card" data-os="windows">
+          <span class="tag">Ваше устройство</span>
+          <div class="ico"><svg><use href="#i-win"/></svg></div>
+          <h3>Windows</h3>
+          <p>Нативное приложение на WinUI 3: волна, чарты, коллекция, скачивание, 10 оформлений. Ничего доустанавливать не нужно.</p>
+          <div class="dl">
+            <a class="btn" href="/dl/windows" data-k="windows"><svg><use href="#i-dl"/></svg><span>Для обычных ПК (x64)</span></a>
+            <a class="btn ghost" href="/dl/windows-arm" data-k="windows-arm"><svg><use href="#i-dl"/></svg><span>Для ноутбуков на ARM</span></a>
+            <small data-meta="windows">ZIP-архив</small>
+          </div>
+          <div class="req"><b>Windows 10</b> (версия 1809 и новее) или <b>Windows 11</b>. ARM — это Snapdragon и Surface Pro X / 11.</div>
+        </article>
+        <article class="card" data-os="android">
+          <span class="tag">Ваше устройство</span>
+          <div class="ico"><svg><use href="#i-and"/></svg></div>
+          <h3>Android</h3>
+          <p>Приложение на Kotlin и Compose с Android Auto: волна, настроения, любимое, плейлисты и поиск голосом прямо в машине.</p>
+          <div class="dl">
+            <a class="btn" href="/dl/android" data-k="android"><svg><use href="#i-dl"/></svg><span>Скачать APK</span></a>
+            <small data-meta="android">Один файл для всех устройств</small>
+          </div>
+          <div class="req"><b>Android 5.0</b> и новее: телефоны, планшеты, ТВ-приставки и Chromebook, любые процессоры.</div>
+        </article>
+        <article class="card" data-os="ios">
+          <span class="tag">Ваше устройство</span>
+          <div class="ico"><svg><use href="#i-ios"/></svg></div>
+          <h3>iPhone и iPad</h3>
+          <p>Приложение на SwiftUI с CarPlay. Apple не пускает его в App Store бесплатно, поэтому оно ставится одним из двух способов.</p>
+          <div class="dl">
+            <a class="btn" href="/dl/ios" data-k="ios"><svg><use href="#i-dl"/></svg><span>IPA для Sideloadly / AltStore</span></a>
+            <a class="btn ghost" href="/dl/trollstore" data-k="trollstore"><svg><use href="#i-dl"/></svg><span>TIPA для TrollStore, с CarPlay</span></a>
+            <small data-meta="ios">Способы установки — ниже</small>
+          </div>
+          <div class="req"><b>iOS / iPadOS 16</b> и новее. Для CarPlay нужен TrollStore.</div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="guide">
+    <div class="wrap">
+      <h2>Как установить</h2>
+      <p class="sub">Пошагово, на всё уходит пара минут.</p>
+      <div class="tabs" role="tablist" aria-label="Платформа">
+        <button role="tab" id="t-windows" aria-controls="g-windows" aria-selected="true">Windows</button>
+        <button role="tab" id="t-android" aria-controls="g-android" aria-selected="false">Android</button>
+        <button role="tab" id="t-ios" aria-controls="g-ios" aria-selected="false">iPhone</button>
+      </div>
+
+      <div class="guide" id="g-windows" role="tabpanel" aria-labelledby="t-windows">
+        <div class="guide-head"><h3>Windows</h3><a class="btn ghost" href="/dl/windows"><svg><use href="#i-dl"/></svg><span>Скачать ZIP</span></a></div>
+        <ol class="steps">
+          <li><div><b class="t">Скачайте архив</b><p>Кнопкой выше. Если у вас ноутбук на ARM (Snapdragon, Surface Pro X / 11), берите версию для ARM — она быстрее; обычная тоже заработает.</p></div></li>
+          <li><div><b class="t">Распакуйте</b><p>Нажмите на архив правой кнопкой → <kbd>Извлечь все…</kbd> и выберите папку, например <span class="path">Документы\Эхо</span>. Запускать прямо из архива не нужно.</p></div></li>
+          <li><div><b class="t">Запустите Echo.exe</b><p>Если появится синее окно «Система Windows защитила ваш компьютер», нажмите <kbd>Подробнее</kbd> → <kbd>Выполнить в любом случае</kbd>. Так Windows встречает любые программы без платной подписи — код Эхо открыт и проверяем.</p></div></li>
+          <li><div><b class="t">Войдите по почте</b><p>Тем же адресом, что на сайте: лайки, плейлисты и вкус волны подтянутся сами. Для удобства закрепите Эхо на панели задач.</p></div></li>
+        </ol>
+        <div class="note"><b>Обновления ставятся сами.</b> Эхо проверяет новую версию при запуске и раз в 6 часов, скачивает её в фоне и устанавливает, когда вы закрываете приложение. Можно и сразу — кнопкой «Перезапустить сейчас».</div>
+      </div>
+
+      <div class="guide" id="g-android" role="tabpanel" aria-labelledby="t-android" hidden>
+        <div class="guide-head"><h3>Android</h3><a class="btn ghost" href="/dl/android"><svg><use href="#i-dl"/></svg><span>Скачать APK</span></a></div>
+        <ol class="steps">
+          <li><div><b class="t">Скачайте APK</b><p>Откройте эту страницу на телефоне и нажмите «Скачать APK». Браузер может спросить, сохранить ли файл, — ответьте <kbd>Скачать</kbd>.</p></div></li>
+          <li><div><b class="t">Откройте файл</b><p>Нажмите на уведомление о загрузке или найдите <span class="path">Echo-Android.apk</span> в «Загрузках».</p></div></li>
+          <li><div><b class="t">Разрешите установку</b><p>В первый раз Android попросит разрешить установку из браузера: <kbd>Настройки</kbd> → включите <kbd>Разрешить из этого источника</kbd> → вернитесь назад.</p><p>На Android 5–7 это одна галочка «Неизвестные источники» в разделе «Безопасность».</p></div></li>
+          <li><div><b class="t">Установите</b><p>Нажмите <kbd>Установить</kbd>. Если Play Защита предупредит о незнакомом приложении — <kbd>Подробнее</kbd> → <kbd>Всё равно установить</kbd>.</p></div></li>
+          <li><div><b class="t">Войдите по почте</b><p>Вкладка «Профиль» → вход по коду из письма. Всё, что вы слушали на сайте, уже здесь.</p></div></li>
+        </ol>
+        <div class="note"><b>Обновления скачиваются сами.</b> Когда выходит новая версия, Эхо загружает её в фоне и показывает плашку «Обновление готово» — останется нажать «Установить». Совсем без нажатия Android не позволяет ни одному приложению вне Google Play.</div>
+      </div>
+
+      <div class="guide" id="g-ios" role="tabpanel" aria-labelledby="t-ios" hidden>
+        <div class="guide-head"><h3>iPhone и iPad</h3></div>
+        <p class="sub" style="margin-bottom:0">Выберите способ. Если у вас стоит TrollStore — берите его: приложение не «протухает» и работает в CarPlay.</p>
+        <div class="two">
+          <div class="opt">
+            <h4>Sideloadly — нужен компьютер</h4>
+            <p>Подходит для любого iPhone и iPad с iOS 16+. Бесплатный Apple ID, без джейлбрейка.</p>
+            <ol>
+              <li>Скачайте <b>Echo.ipa</b> на компьютер и установите <b>Sideloadly</b> с sideloadly.io (Windows или Mac). На Windows также понадобится iTunes с сайта Apple.</li>
+              <li>Подключите iPhone кабелем и нажмите на нём <b>Доверять</b>.</li>
+              <li>Перетащите Echo.ipa в окно Sideloadly, введите свой Apple ID и нажмите <b>Start</b>.</li>
+              <li>На iPhone: <b>Настройки → Основные → VPN и управление устройством</b> → ваш Apple ID → <b>Доверять</b>.</li>
+              <li>На iOS 16 и новее включите <b>Настройки → Конфиденциальность → Режим разработчика</b> и перезагрузите телефон.</li>
+              <li>С бесплатным Apple ID подпись действует 7 дней — Sideloadly умеет продлевать её сам, пока компьютер и iPhone в одной сети Wi-Fi. Так же работает <b>AltStore</b>.</li>
+            </ol>
+            <div class="dl" style="margin-top:14px"><a class="btn ghost" href="/dl/ios"><svg><use href="#i-dl"/></svg><span>Скачать Echo.ipa</span></a></div>
+          </div>
+          <div class="opt">
+            <h4>TrollStore — навсегда и с CarPlay</h4>
+            <p>Для устройств, где уже стоит TrollStore (iOS 14.0 – 16.6.1, 16.7 RC и 17.0). Разрешение CarPlay уже вшито в файл.</p>
+            <ol>
+              <li>Откройте эту страницу на iPhone в Safari и скачайте <b>Echo-TrollStore.tipa</b>.</li>
+              <li>Нажмите на загрузку → <b>Поделиться</b> → <b>TrollStore</b>. Или откройте TrollStore, нажмите <b>+</b> и выберите файл.</li>
+              <li>Нажмите <b>Install</b>. Эхо появится на экране «Домой» и больше не попросит переподписать себя.</li>
+              <li>Подключите iPhone к машине — Эхо появится среди приложений CarPlay.</li>
+            </ol>
+            <div class="dl" style="margin-top:14px"><a class="btn ghost" href="/dl/trollstore"><svg><use href="#i-dl"/></svg><span>Скачать Echo-TrollStore.tipa</span></a></div>
+          </div>
+        </div>
+        <div class="note"><b>Обновления на iPhone — вручную.</b> iOS не даёт приложению заменить само себя, поэтому в настройках Эхо есть кнопка «Проверить обновления»: она сравнит версии и откроет эту страницу. Новую версию ставьте тем же способом, что и первую, — данные и вход сохранятся.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="car">
+    <div class="wrap">
+      <h2>В машине</h2>
+      <p class="sub">«Моя волна» и настроения запускаются одним касанием, руль и кнопки на панели переключают треки. В машине играют треки с прямым звуком — Audius, Jamendo, ваши загрузки и скачанное. Песни с YouTube идут только на телефоне: YouTube разрешает их лишь в видимом плеере.</p>
+      <div class="cars">
+        <div>
+          <div class="car" role="img" aria-label="Эхо в CarPlay: вкладка «Волна» со списком настроений">
+            <div class="dock"><span>12:40</span><div class="ap" style="background:#30d158"><svg><use href="#i-phone"/></svg></div><div class="ap" style="background:#fff;color:#000"><svg><use href="#i-wave"/></svg></div><div class="ap" style="background:#0a84ff"><svg><use href="#i-map"/></svg></div><div class="ap" style="background:#3a3a3c"><svg><use href="#i-grid"/></svg></div></div>
+            <div class="scr">
+              <div class="ttl">Волна</div>
+              <div class="lst">
+                <div class="it on"><svg><use href="#i-wave"/></svg><span><b>Моя волна</b><small>Подобрано под вас</small></span></div>
+                <div class="hdr">Настроение</div>
+                <div class="it"><svg><use href="#i-spark"/></svg><span><b>Энергия</b><small>Волна под настроение</small></span></div>
+                <div class="it"><svg><use href="#i-spark"/></svg><span><b>Спокойствие</b><small>Волна под настроение</small></span></div>
+                <div class="it"><svg><use href="#i-spark"/></svg><span><b>Фокус</b><small>Волна под настроение</small></span></div>
+              </div>
+              <div class="bar"><div class="on"><svg><use href="#i-wave"/></svg>Волна</div><div><svg><use href="#i-heart"/></svg>Любимое</div><div><svg><use href="#i-list"/></svg>Плейлисты</div><div><svg><use href="#i-down"/></svg>Скачанное</div></div>
+            </div>
+          </div>
+          <p class="cap">CarPlay — iPhone с TrollStore. Вкладки: Волна, Любимое, Плейлисты, Скачанное.</p>
+        </div>
+        <div class="opt">
+          <h4>Android Auto</h4>
+          <p>Эхо — обычное медиаприложение Android Auto: волна, настроения, любимое, плейлисты, недавнее и поиск голосом. Приложения не из Google Play Android Auto показывает только после одной настройки:</p>
+          <ol>
+            <li>На телефоне откройте <b>настройки Android Auto</b> (в настройках телефона найдите «Android Auto»).</li>
+            <li>Пролистайте вниз и <b>10 раз нажмите на «Версия»</b>, подтвердите включение режима разработчика.</li>
+            <li>Меню <b>⋮ → Настройки для разработчиков</b> → включите <b>«Неизвестные источники»</b>.</li>
+            <li>Подключите телефон к машине — Эхо появится среди музыкальных приложений.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="updates">
+    <div class="wrap">
+      <h2>Обновления</h2>
+      <p class="sub">Новые версии собираются из открытого кода и выкладываются сюда автоматически.</p>
+      <div class="upd">
+        <div class="card"><span class="state"><i></i>Сами</span><h3>Android</h3><p>Скачиваются в фоне, проверяются по SHA-256, установка — одно нажатие на плашке «Обновление готово».</p></div>
+        <div class="card"><span class="state"><i></i>Сами</span><h3>Windows</h3><p>Скачиваются в фоне и ставятся при закрытии приложения. Настройки → «Обновления» покажет версию.</p></div>
+        <div class="card"><span class="state off"><i></i>Проверка</span><h3>iPhone и iPad</h3><p>Кнопка «Проверить обновления» в настройках. Ставится тем же способом, что и в первый раз.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>Вопросы</h2>
+      <details><summary>Это безопасно?</summary><p>Весь код открыт на GitHub под лицензией MIT, а приложения собираются из него автоматически на серверах GitHub. Контрольные суммы ниже совпадают с файлами в релизах репозитория, их можно сверить.</p></details>
+      <details><summary>Почему Windows и Android предупреждают при установке?</summary><p>Так система реагирует на любые программы без платного сертификата разработчика (Microsoft) или без Google Play. Это не значит, что с файлом что-то не так: предупреждение пропадает, когда у программы накопится репутация.</p></details>
+      <details><summary>Почему приложения такие лёгкие?</summary><p>Музыка не хранится внутри: она приходит с сервера, когда вы её слушаете, или лежит в «Скачанном». В самих приложениях только код и интерфейс, поэтому Android весит несколько мегабайт, а Windows — больше из-за встроенной среды выполнения .NET и WinUI.</p></details>
+      <details><summary>Можно ли слушать без интернета?</summary><p>Да: треки, которые автор разрешил скачивать, сохраняются в «Скачанное» и играют без сети — в приложении и в машине.</p></details>
+      <details><summary>Приложение Android не обновляется поверх старого</summary><p>Если при установке пишет «Приложение не установлено», удалите старую версию Эхо и поставьте новую — после входа по почте всё вернётся. Это нужно один раз.</p></details>
+      <details><summary>На iPhone приложение перестало открываться</summary><p>С бесплатным Apple ID подпись Sideloadly и AltStore действует 7 дней. Продлите её в Sideloadly или AltStore — данные сохранятся. Через TrollStore такого не бывает.</p></details>
+    </div>
+  </section>
+
+  <section id="sums">
+    <div class="wrap">
+      <h2>Контрольные суммы</h2>
+      <p class="sub">SHA-256 текущих файлов. Проверить на Windows: <kbd>certutil -hashfile файл SHA256</kbd>, на Mac и Linux: <kbd>shasum -a 256 файл</kbd>.</p>
+      <div class="sums" id="sumList"><div class="sum"><span>Загружаю…</span><code></code></div></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Эхо · <a href="/">music.maxsim.space</a></span>
+    <span><a href="https://github.com/maxsim9687/echo-music" rel="noopener">Исходный код на GitHub</a> · <a href="https://maxsim.space/#project-echo" rel="noopener">maxsim.space</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var NAMES = { windows: "Windows x64", "windows-arm": "Windows ARM64", android: "Android", ios: "iPhone и iPad (IPA)", trollstore: "iPhone и iPad (TrollStore)" };
+  var ua = navigator.userAgent || "";
+  var touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  var os = /Android/i.test(ua) ? "android" : (/iPhone|iPad|iPod/.test(ua) || touchMac) ? "ios" : /Windows/.test(ua) ? "windows" : "";
+  var arm = /ARM64|aarch64/i.test(ua);
+
+  function mb(n) { return n >= 1048576 ? (n / 1048576).toFixed(n >= 104857600 ? 0 : 1).replace(".", ",") + " МБ" : Math.max(1, Math.round(n / 1024)) + " КБ"; }
+  function ver(tag) { var m = /(\d+)$/.exec(tag || ""); return m ? "1.0." + m[1] : ""; }
+  function date(s) { try { return new Date(s).toLocaleDateString("ru-RU", { day: "numeric", month: "long" }); } catch (e) { return ""; } }
+
+  // tabs
+  var tabs = [].slice.call(document.querySelectorAll('[role="tab"]'));
+  function show(id, focus) {
+    tabs.forEach(function (t) {
+      var on = t.id === "t-" + id;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      if (on && focus) t.focus();
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener("click", function () { show(t.id.slice(2)); });
+    t.addEventListener("keydown", function (e) {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      var n = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+      show(n.id.slice(2), true);
+    });
+  });
+  var hash = location.hash.slice(1);
+  show(["windows", "android", "ios"].indexOf(hash) >= 0 ? hash : (os || "windows"));
+  if (["windows", "android", "ios"].indexOf(hash) >= 0) document.getElementById("guide").scrollIntoView();
+
+  // the visitor's device first
+  if (os) {
+    var card = document.querySelector('.card[data-os="' + os + '"]');
+    if (card) { card.classList.add("me"); card.parentNode.insertBefore(card, card.parentNode.firstChild); }
+  }
+  var pickKey = os === "windows" ? (arm ? "windows-arm" : "windows") : os;
+  var what = document.getElementById("pickWhat"), btn = document.getElementById("pickBtn"), meta = document.getElementById("pickMeta");
+  if (pickKey) {
+    what.textContent = "Эхо для " + (os === "windows" ? "Windows" : os === "android" ? "Android" : "iPhone и iPad");
+    if (os === "ios") { btn.href = "#guide"; btn.querySelector("span").textContent = "Как установить"; meta.textContent = "Два способа: Sideloadly или TrollStore с CarPlay"; }
+    else { btn.href = "/dl/" + pickKey; }
+  } else {
+    document.getElementById("pickWho").textContent = "Приложения";
+    what.textContent = "Windows, Android и iPhone";
+    meta.textContent = "Выберите устройство ниже";
+  }
+
+  fetch("/api/apps").then(function (r) { return r.ok ? r.json() : {}; }).then(function (a) {
+    function line(k) { var x = a[k]; return x ? "Версия " + ver(x.tag) + " · " + mb(x.size) + (x.date ? " · " + date(x.date) : "") : ""; }
+    var w = a.windows, an = a.android, io = a.ios;
+    var mw = document.querySelector('[data-meta="windows"]'); if (w) mw.textContent = "ZIP · " + line("windows");
+    var ma = document.querySelector('[data-meta="android"]'); if (an) ma.textContent = "APK · " + line("android") + " · для всех устройств";
+    var mi = document.querySelector('[data-meta="ios"]'); if (io) mi.textContent = line("ios");
+    if (pickKey && os !== "ios" && a[pickKey]) meta.textContent = line(pickKey);
+    var list = document.getElementById("sumList");
+    list.textContent = "";
+    Object.keys(NAMES).forEach(function (k) {
+      if (!a[k]) return;
+      var row = document.createElement("div"); row.className = "sum";
+      var n = document.createElement("span"); n.textContent = a[k].file + " · " + ver(a[k].tag);
+      var c = document.createElement("code"); c.textContent = a[k].sha256;
+      row.appendChild(n); row.appendChild(c); list.appendChild(row);
+    });
+    if (!list.children.length) list.innerHTML = '<div class="sum"><span>Файлы ещё загружаются на сервер</span><code>загляните через пару минут</code></div>';
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

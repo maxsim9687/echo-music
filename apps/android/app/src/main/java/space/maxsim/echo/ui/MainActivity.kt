@@ -67,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import space.maxsim.echo.data.Profile
+import space.maxsim.echo.data.Updater
 import space.maxsim.echo.data.fmtTime
 import space.maxsim.echo.player.Hub
 
@@ -94,6 +95,11 @@ private fun Root() {
     val yt by Hub.ytVideo.collectAsState()
     val idx by Hub.index.collectAsState()
     LaunchedEffect(Unit) { Profile.refreshMe() }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val update by Updater.ready.collectAsState()
+    var updateLater by remember { mutableStateOf(false) }
+    // new versions are fetched on their own: at start and every 6 hours while the app is open
+    LaunchedEffect(Unit) { while (true) { Updater.check(ctx.applicationContext); kotlinx.coroutines.delay(6 * 3600_000L) } }
     LaunchedEffect(Unit) { Hub.toast.collect { toast = it; kotlinx.coroutines.delay(3500); toast = null } }
     BackHandler(full) { full = false }
 
@@ -135,6 +141,22 @@ private fun Root() {
             val mod = if (full) Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.statusBars).padding(top = 64.dp, start = 20.dp, end = 20.dp).fillMaxWidth().aspectRatio(16f / 9f)
             else Modifier.align(Alignment.BottomEnd).windowInsetsPadding(WindowInsets.navigationBars).padding(end = 12.dp, bottom = 168.dp).width(minOf(w - 24, 356).dp).aspectRatio(16f / 9f)
             Box(mod.clip(RoundedCornerShape(18.dp)).background(androidx.compose.ui.graphics.Color.Black)) { YouTubePlayer(Modifier.fillMaxSize()) }
+        }
+
+        update?.let { u ->
+            if (!updateLater && !full) Row(
+                Modifier.align(Alignment.TopCenter).windowInsetsPadding(WindowInsets.safeDrawing).padding(12.dp).fillMaxWidth()
+                    .glass(RoundedCornerShape(18.dp)).padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Обновление готово", color = C.fg, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text("Версия 1.0.${u.build} уже скачана", color = C.muted, fontSize = 12.sp)
+                }
+                Text("Позже", color = C.muted, fontSize = 13.sp, modifier = Modifier.clip(RoundedCornerShape(14.dp)).clickable { updateLater = true }.padding(10.dp))
+                Text("Установить", color = C.bg, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clip(RoundedCornerShape(14.dp)).background(C.fg).clickable { Updater.install(ctx) }.padding(horizontal = 14.dp, vertical = 10.dp))
+            }
         }
 
         toast?.let {

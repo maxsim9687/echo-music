@@ -7,6 +7,11 @@ struct SettingsView: View {
     @EnvironmentObject var wave: Wave
     @State private var resetArmed = false
     @State private var resetNote = ""
+    @State private var updateNote = ""
+    @State private var updateBuild = 0
+    @Environment(\.openURL) private var openURL
+
+    private var currentBuild: Int { Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") ?? 0 }
 
     var body: some View {
         let th = app.theme
@@ -19,6 +24,8 @@ struct SettingsView: View {
                     .padding(.top, 8)
 
                 account(th)
+
+                updates(th)
 
                 VStack(alignment: .leading, spacing: 14) {
                     SectionHeader(title: "Оформление")
@@ -81,6 +88,45 @@ struct SettingsView: View {
         }
         .screenBackground()
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    /// iOS does not let an app replace itself, so here it only checks: a newer build opens the install guide.
+    @ViewBuilder
+    private func updates(_ th: Theme) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Обновления")
+            Text("Версия 1.0.\(currentBuild). На iPhone приложение не может обновить себя само: проверьте новую версию и поставьте её тем же способом, что и в первый раз.")
+                .font(.system(size: 14))
+                .foregroundStyle(th.muted)
+            if !updateNote.isEmpty {
+                Text(updateNote).font(.system(size: 14, weight: .semibold)).foregroundStyle(th.fg)
+            }
+            HStack(spacing: 10) {
+                PillButton(title: "Проверить обновления", icon: "arrow.triangle.2.circlepath") { Task { await checkUpdate() } }
+                if updateBuild > 0 {
+                    PillButton(title: "Скачать 1.0.\(updateBuild)", icon: "arrow.down.circle", solid: true) {
+                        if let u = URL(string: "https://music.maxsim.space/apps#ios") { openURL(u) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func checkUpdate() async {
+        updateNote = "Проверяю…"
+        guard let all = try? await API.shared.get("/api/apps"),
+              let tag = all["ios"]["tag"].string,
+              let build = Int(tag.replacingOccurrences(of: "apps-", with: "")) else {
+            updateNote = "Не получилось проверить, попробуйте позже"
+            return
+        }
+        if build > currentBuild {
+            updateBuild = build
+            updateNote = "Есть новая версия 1.0.\(build)"
+        } else {
+            updateBuild = 0
+            updateNote = "У вас последняя версия"
+        }
     }
 
     @ViewBuilder

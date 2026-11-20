@@ -39,6 +39,12 @@ public partial class App : Application
 
     async Task Boot()
     {
+        Updater.Ready += build =>
+        {
+            var t = Echo.UI.Toasts.Show($"Обновление 1.0.{build} скачано. Установится при закрытии Эхо.", ms: 12000);
+            t.Action("Перезапустить сейчас", () => { Updater.Apply(restart: true); window?.Close(); });
+        };
+        _ = Task.Run(async () => { while (true) { await Updater.Check(); await Task.Delay(TimeSpan.FromHours(6)); } });
         await Account.RefreshMe();
         if (window == null) return;
         // a signed-in listener without taste goes to the taste setup first

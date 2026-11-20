@@ -30,7 +30,7 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
                 done()
             }
         }
-        let moods = MoodPreset.all.keys.sorted().map { name -> CPListItem in
+        let moods = MoodPreset.order.filter { MoodPreset.all[$0] != nil }.map { name -> CPListItem in
             let it = CPListItem(text: name, detailText: "Волна под настроение", image: UIImage(systemName: "sparkles"))
             it.handler = { [weak self] _, done in
                 Task { @MainActor in
